@@ -56,3 +56,9 @@
 
 (deftest ^:clock lwt-clock-drift-decommission
   (run-test! clock-drift-test-decommission))
+
+(deftest ^:lwt ^:decommission lwt-crash-subset-mix
+  (run-test! crash-subset-test-mix))
+
+(deftest ^:lwt ^:decommission lwt-isolate-node-mix
+  (run-test! isolate-node-test-mix))

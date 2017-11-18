@@ -11,7 +11,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -28,6 +27,7 @@
             [clojurewerkz.cassaforte.cql :as cql])
   (:import (clojure.lang ExceptionInfo)
            (com.datastax.driver.core ConsistencyLevel)
+           (com.datastax.driver.core.schemabuilder SchemaBuilder)
            (com.datastax.driver.core.policies RetryPolicy
                                               RetryPolicy$RetryDecision)
            (java.net InetAddress)))
@@ -44,8 +44,7 @@
 (defn compaction-strategy
   "Returns the compaction strategy to use"
   []
-  (or (System/getenv "JEPSEN_COMPACTION_STRATEGY")
-      "SizeTieredCompactionStrategy"))
+  (SchemaBuilder/sizedTieredStategy))
 
 (defn compressed-commitlog?
   "Returns whether to use commitlog compression"
@@ -85,18 +84,29 @@
   [hostname]
   (.getHostAddress (InetAddress/getByName (name hostname))))
 
+(defn dns-hostnames
+  "Gets the list of hostnames"
+  [test addrs]
+  (let [names (:nodes test)
+        ordered (map dns-resolve names)]
+    (set (map (fn [addr]
+                (->> (.indexOf ordered addr)
+                     (get names)))
+               addrs))))
+
 (defn live-nodes
   "Get the list of live nodes from a random node in the cluster"
   [test]
-  (set (some (fn [node]
+  (->> (some (fn [node]
                (try (jmx/with-connection {:host (name node) :port 7199}
                       (jmx/read "org.apache.cassandra.db:type=StorageService"
                                 :LiveNodes))
-                    (catch Exception e
-                      (info "Couldn't get status from node" node))))
-             (-> test :nodes set (set/difference @(:bootstrap test))
-                 (#(map (comp dns-resolve name) %)) set (set/difference @(:decommission test))
-                 shuffle))))
+                      (catch Exception e
+                        (info "Couldn't get status from node" node))))
+               (-> test :nodes set (set/difference @(:bootstrap test))
+                   set (set/difference @(:decommission test))
+                   shuffle))
+    (dns-hostnames test)))
 
 (defn joining-nodes
   "Get the list of joining nodes from a random node in the cluster"
@@ -164,24 +174,24 @@
             (c/exec :tar :xzvf "cassandra.tar.gz" :-C "~")
             (c/exec :rm :-r :-f (lit "~/cassandra"))
             (c/exec :mv (lit "~/apache* ~/cassandra"))
-            (c/exec :echo url :> (lit ".download")))))
-    (c/exec
-     :echo
-     "deb http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
-     :>"/etc/apt/sources.list.d/webupd8team-java.list")
-    (c/exec
-     :echo
-     "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
-     :>> "/etc/apt/sources.list.d/webupd8team-java.list")
-    (try (c/exec :apt-key :adv :--keyserver "hkp://keyserver.ubuntu.com:80"
-                :--recv-keys "EEA14886")
-         (debian/update!)
-         (catch RuntimeException e
-           (info "Error updating caused by" e)))
-    (c/exec :echo
-            "debconf shared/accepted-oracle-license-v1-1 select true"
-            | :debconf-set-selections)
-    (debian/install [:oracle-java8-installer]))))
+            (c/exec :echo url :> (lit ".download"))
+            (c/exec
+             :echo
+             "deb http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
+             :>"/etc/apt/sources.list.d/webupd8team-java.list")
+            (c/exec
+             :echo
+             "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
+             :>> "/etc/apt/sources.list.d/webupd8team-java.list")
+            (try (c/exec :apt-key :adv :--keyserver "hkp://keyserver.ubuntu.com:80"
+                        :--recv-keys "EEA14886")
+                 (debian/update!)
+                 (catch RuntimeException e
+                   (info "Error updating caused by" e)))
+            (c/exec :echo
+                    "debconf shared/accepted-oracle-license-v1-1 select true"
+                    | :debconf-set-selections)
+            (debian/install [:oracle-java8-installer])))))))
 
 (defn configure!
   "Uploads configuration files to the given node."
@@ -227,7 +237,7 @@
                       (coordinator-batchlog-disabled?) "\"")
            :>> "~/cassandra/conf/cassandra-env.sh")
    (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "~/cassandra/conf/logback.xml")
-   (c/exec :echo (str "auto_bootstrap: " (-> test :bootstrap deref node boolean))
+   (c/exec :echo (str "auto_bootstrap: " (boolean ((-> test :bootstrap deref) node)))
            :>> "~/cassandra/conf/cassandra.yaml")))
 
 (defn start!
@@ -235,7 +245,8 @@
   [node test]
   (info node "starting Cassandra")
   (c/su
-   (c/exec (lit "~/cassandra/bin/cassandra"))))
+   (c/exec (lit "~/cassandra/bin/cassandra -R"))
+   (c/exec :sleep :60)))
 
 (defn guarded-start!
   "Guarded start that only starts nodes that have joined the cluster already
@@ -244,7 +255,7 @@
   [node test]
   (let [bootstrap (:bootstrap test)
         decommission (:decommission test)]
-    (when-not (or (node @bootstrap) (->> node name dns-resolve (get decommission)))
+    (when-not (or (@bootstrap node) (->> node name dns-resolve (get decommission)))
       (start! node test))))
 
 (defn stop!
@@ -297,11 +308,20 @@
     (gen/once {:type :info, :f :stop})
     (gen/sleep 10))))
 
+(defn conductor
+  "Combines a generator of normal operations and a generator for a conductor.
+  The name of the conductor is given."
+  ([conductor conductor-gen]
+   (gen/on #{conductor} conductor-gen))
+  ([conductor conductor-gen src-gen]
+   (gen/concat (gen/on #{conductor} conductor-gen)
+           (gen/on (complement #{conductor}) src-gen))))
+
 (defn bootstrap
   "A generator that bootstraps nodes into the cluster with the given pause
   and routes other :op's onward."
   [pause src-gen]
-  (gen/conductor :bootstrapper
+  (conductor :bootstrapper
                  (gen/seq (cycle [(gen/sleep pause)
                                   {:type :info :f :bootstrap}]))
                  src-gen))
@@ -319,7 +339,7 @@
                            (gen/sleep (scaled 60))
                            {:type :info :f :stop}])))
          (bootstrap 120)
-         (gen/conductor :decommissioner
+         (conductor :decommissioner
                         (gen/seq (cycle [(gen/sleep (scaled 100))
                                          {:type :info :f :decommission}])))
          (gen/time-limit (scaled duration)))
@@ -377,7 +397,6 @@
       (take (shuffle xs))
       set
       (set/difference @(:bootstrap test))
-      (#(map (comp dns-resolve name) %))
       set
       (set/difference @(:decommission test))
       shuffle))
@@ -431,7 +450,7 @@
   (merge tests/noop-test
          {:name    (str "cassandra " name)
           :os      debian/os
-          :db      (db "2.1.8")
+          :db      (db "3.11.1")
           :bootstrap (atom #{})
           :decommission (atom #{})}
          opts))

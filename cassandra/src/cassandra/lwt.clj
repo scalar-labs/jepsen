@@ -10,7 +10,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -21,12 +20,12 @@
              [util :as net/util]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
+            [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
             [clojurewerkz.cassaforte.policies :refer :all]
             [clojurewerkz.cassaforte.cql :as cql]
             [cassandra.core :refer :all]
-            [cassandra.checker :as extra-checker]
             [cassandra.conductors :as conductors])
   (:import (clojure.lang ExceptionInfo)
            (com.datastax.driver.core ConsistencyLevel)
@@ -47,16 +46,17 @@
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
-                                    {:class "SimpleStrategy"
-                                     :replication_factor 3}}))
+                                    {"class" "SimpleStrategy"
+                                     "replication_factor" 3}}))
         (cql/use-keyspace conn "jepsen_keyspace")
         (cql/create-table conn "lwt"
                           (if-not-exists)
                           (column-definitions {:id :int
                                                :value :int
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
+                                               :primary-key [:id]}))
+        ; @TODO change compaction storategy
+        ;(cql/alter-table conn "lwt"
+        ;                  (with {:compaction-options (compaction-strategy)}))
         (->CasRegisterClient conn))))
   (invoke! [this test op]
     (case (:f op)
@@ -66,7 +66,7 @@
                                          (where [[= :id 0]]))]
                   (if (-> result first ak)
                     (assoc op :type :ok)
-                    (assoc op :type :fail :value (-> result first :value))))
+                    (assoc op :type :fail :value [v v'])))
                 (catch UnavailableException e
                   (assoc op :type :fail :error (.getMessage e)))
                 (catch ReadTimeoutException e
@@ -101,16 +101,16 @@
                     (info "All the servers are down - waiting 2s")
                     (Thread/sleep 2000)
                     (assoc op :type :fail :error (.getMessage e))))
-      :read (try (let [value (->> (with-consistency-level ConsistencyLevel/SERIAL
-                                    (cql/select conn "lwt"
-                                                (where [[= :id 0]])))
+      :read (try (let [value (->> (cassandra/execute conn
+                                    "SELECT * FROM lwt WHERE id = 0;"
+                                    :consistency-level (consistency-level :serial))
                                   first :value)]
                    (assoc op :type :ok :value value))
                  (catch UnavailableException e
                    (info "Not enough replicas - failing")
-                   (assoc op :type :fail :value (.getMessage e)))
+                   (assoc op :type :fail :error (.getMessage e)))
                  (catch ReadTimeoutException e
-                   (assoc op :type :fail :value :timed-out))
+                   (assoc op :type :info :value :timed-out))
                  (catch NoHostAvailableException e
                    (info "All the servers are down - waiting 2s")
                    (Thread/sleep 2000)
@@ -135,103 +135,100 @@
                                            (gen/stagger 1/5)
                                            (gen/delay 2)
                                            (gen/nemesis
-                                            (gen/seq (cycle
-                                                      [(gen/sleep 5)
-                                                       {:type :info :f :stop}
-                                                       (gen/sleep 10)
-                                                       {:type :info :f :start}
-                                                       ])))
-                                           (bootstrap 2)
-                                           (gen/conductor
-                                            :decommissioner
-                                            (gen/seq (cycle
-                                                      [(gen/sleep 4)
-                                                       {:type :info :f :decommission}])))
-                                           (gen/time-limit 20))
-                                      (->> gen/void
-                                           (gen/conductor
-                                            :bootstrapper
-                                            (gen/once {:type :info :f :bootstrapper}))
-                                           gen/barrier))
+                                            (gen/seq (cycle (conductors/mix-failure opts))))
+                                           (gen/time-limit 60)))
                           :checker (checker/compose
-                                    {:linear extra-checker/enhanced-linearizable})})
-         opts))
+                                    {:linear (checker/linearizable)})})
+         (assoc opts :nemesis
+                 (nemesis/compose
+                   (conj {#{:start :stop} (:nemesis opts)}
+                         (when (:decommissioner opts)
+                           {#{:decommission} (conductors/decommissioner)})
+                         (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
+                                {#{:bootstrap} (conductors/bootstrapper)}))))))
 
 (def bridge-test
   (cas-register-test "bridge"
-                     {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
+                     {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test
   (cas-register-test "halves"
-                     {:conductors {:nemesis (nemesis/partition-random-halves)}}))
+                     {:nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test
   (cas-register-test "isolate node"
-                     {:conductors {:nemesis (nemesis/partition-random-node)}}))
+                     {:nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test
   (cas-register-test "crash"
-                     {:conductors {:nemesis (crash-nemesis)}}))
+                     {:nemesis (crash-nemesis)}))
 
 (def flush-compact-test
   (cas-register-test "flush and compact"
-                  {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+                     {:nemesis (conductors/flush-and-compacter)}))
 
 (def clock-drift-test
   (cas-register-test "clock drift"
-                     {:conductors {:nemesis (nemesis/clock-scrambler 10000)}}))
+                     {:nemesis (nemesis/clock-scrambler 10000)}))
 
 (def bridge-test-bootstrap
   (cas-register-test "bridge bootstrap"
-                     {:bootstrap (atom #{:n4 :n5})
-                      :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                   :bootstrapper (conductors/bootstrapper)}}))
+                     {:bootstrap (atom #{"n4" "n5"})
+                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test-bootstrap
   (cas-register-test "halves bootstrap"
-                     {:bootstrap (atom #{:n4 :n5})
-                      :conductors {:nemesis (nemesis/partition-random-halves)
-                                   :bootstrapper (conductors/bootstrapper)}}))
+                     {:bootstrap (atom #{"n4" "n5"})
+                      :nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test-bootstrap
   (cas-register-test "isolate node bootstrap"
-                     {:bootstrap (atom #{:n4 :n5})
-                      :conductors {:nemesis (nemesis/partition-random-node)
-                                   :bootstrapper (conductors/bootstrapper)}}))
+                     {:bootstrap (atom #{"n4" "n5"})
+                      :nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test-bootstrap
   (cas-register-test "crash bootstrap"
-                     {:bootstrap (atom #{:n4 :n5})
-                      :conductors {:nemesis (crash-nemesis)
-                                   :bootstrapper (conductors/bootstrapper)}}))
+                     {:bootstrap (atom #{"n4" "n5"})
+                      :nemesis (crash-nemesis)}))
 
 (def clock-drift-test-bootstrap
   (cas-register-test "clock drift bootstrap"
-                     {:bootstrap (atom #{:n4 :n5})
-                      :conductors {:nemesis (nemesis/clock-scrambler 10000)
-                                   :bootstrapper (conductors/bootstrapper)}}))
+                     {:bootstrap (atom #{"n4" "n5"})
+                      :nemesis (nemesis/clock-scrambler 10000)}))
 
 (def bridge-test-decommission
   (cas-register-test "bridge decommission"
-                     {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                   :decommissioner (conductors/decommissioner)}}))
+                     {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                      :decommissioner true}))
 
 (def halves-test-decommission
   (cas-register-test "halves decommission"
-                     {:conductors {:nemesis (nemesis/partition-random-halves)
-                                   :decommissioner (conductors/decommissioner)}}))
+                     {:nemesis (nemesis/partition-random-halves)
+                      :decommissioner true}))
 
 (def isolate-node-test-decommission
   (cas-register-test "isolate node decommission"
-                     {:conductors {:nemesis (nemesis/partition-random-node)
-                                   :decommissioner (conductors/decommissioner)}}))
+                     {:nemesis (nemesis/partition-random-node)
+                      :decommissioner true}))
 
 (def crash-subset-test-decommission
   (cas-register-test "crash decommission"
-                     {:conductors {:nemesis (crash-nemesis)
-                                   :decommissioner (conductors/decommissioner)}}))
+                     {:nemesis (crash-nemesis)
+                      :decommissioner true}))
 
 (def clock-drift-test-decommission
   (cas-register-test "clock drift decommission"
-                     {:conductors {:nemesis (nemesis/clock-scrambler 10000)
-                                   :decommissioner (conductors/decommissioner)}}))
+                     {:nemesis (nemesis/clock-scrambler 10000)
+                      :decommissioner true}))
+
+(def crash-subset-test-mix
+  (cas-register-test "crash bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (crash-nemesis)
+                      :decommissioner true}))
+
+(def isolate-node-test-mix
+  (cas-register-test "crash bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-node)
+                      :decommissioner true}))

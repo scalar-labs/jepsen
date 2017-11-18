@@ -4,6 +4,7 @@
             [clojure.tools.logging :refer :all]
             [jepsen [client :as client]
              [control :as c]
+             [generator :as gen]
              [nemesis :as nemesis]
              [net :as net]
              [util :as util :refer [meh]]]))
@@ -13,10 +14,12 @@
   (reify client/Client
     (setup! [this test node] this)
     (invoke! [this test op]
-      (let [bootstrap (:bootstrap test)]
+      (let [bootstrap (:bootstrap test)
+            decommission (:decommission test)]
         (if-let [node (first @bootstrap)]
           (do (info node "starting bootstrapping")
               (swap! bootstrap rest)
+              (swap! decommission rest)
               (c/on node (cassandra/start! node test))
               (while (some #{cassandra/dns-resolve (name node)}
                            (cassandra/joining-nodes test))
@@ -31,12 +34,16 @@
   (reify client/Client
     (setup! [this test node] this)
     (invoke! [this test op]
-      (let [decommission (:decommission test)]
-        (if-let [node (some-> test cassandra/live-nodes (set/difference @decommission)
-                              shuffle (get 3))] ; keep at least RF nodes
+      (let [decommission (:decommission test)
+            bootstrap (:bootstrap test)]
+        (if-let [node (->> (some-> test cassandra/live-nodes (set/difference @decommission)
+                              shuffle (get 3)) ; keep at least RF nodes
+                           (.indexOf (map cassandra/dns-resolve (:nodes test)))
+                           (get (:nodes test)))]
           (do (info node "decommissioning")
               (info @decommission "already decommissioned")
               (swap! decommission conj node)
+              (swap! bootstrap conj node)
               (cassandra/nodetool node "decommission")
               (assoc op :value (str node " decommissioned")))
           (assoc op :value "no nodes eligible for decommission"))))
@@ -87,3 +94,21 @@
 
     (teardown! [this test]
       (net/heal! (:net test) test))))
+
+(defn mix-failure
+  "Make a seq with start and stop for nemesis failure, and mix bootstrapping and decommissioning"
+  [opts]
+  (let [decop (when (:decommissioner opts)
+                {:type :info :f :decommission})
+        bootop (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
+                 {:type :info :f :bootstrap})
+        ops [decop bootop]]
+    (concat
+      (->> (repeatedly #(vector (gen/sleep (rand-int 20))
+                                {:type :info :f :start}
+                                (gen/sleep (rand-int 20))
+                                (rand-nth ops)
+                                (gen/sleep (rand-int 20))
+                                {:type :info :f :stop}))
+           (take 60) flatten)
+      [(gen/sleep (rand-int 20))])))
