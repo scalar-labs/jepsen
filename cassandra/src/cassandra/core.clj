@@ -21,6 +21,7 @@
              [util :as net/util]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
+            [clojurewerkz.cassaforte.metadata :as metadata]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
             [clojurewerkz.cassaforte.policies :refer :all]
@@ -75,7 +76,7 @@
            (throw (RuntimeException.
                    (str "Driver didn't report all nodes were up in "
                         timeout-secs "s - failing")))
-           (while (->> (cassandra/get-hosts conn)
+           (while (->> (metadata/hosts conn)
                        (map :is-up) and not)
              (Thread/sleep 500))))
 

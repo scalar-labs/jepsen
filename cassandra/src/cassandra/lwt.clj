@@ -55,8 +55,8 @@
                                                :value :int
                                                :primary-key [:id]}))
         ; @TODO change compaction storategy
-        ;(cql/alter-table conn "lwt"
-        ;                  (with {:compaction-options (compaction-strategy)}))
+        (cql/alter-table conn "lwt"
+                          (with {:compaction-options (compaction-strategy)}))
         (->CasRegisterClient conn))))
   (invoke! [this test op]
     (case (:f op)
