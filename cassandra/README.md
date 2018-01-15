@@ -25,35 +25,19 @@ VBoxManage modifyvm default --memory 4096
 cd ~
 git clone https://github.com/clojurewerkz/cassaforte.git
 ```
-  - Change Cassandra Java driver in project.clj
-```
-- [com.datastax.cassandra/cassandra-driver-core "3.0.2"]
-+ [com.datastax.cassandra/cassandra-driver-core "3.1.3"]
-```
   - Modify option methods as below in src/clojure/clojurewerkz/cassaforte/query.clj
 ```
-diff --git src/clojure/clojurewerkz/cassaforte/query.clj src/clojure/clojurewerkz/cassaforte/query.clj
-index 0899355..d4f80a1 100644
---- src/clojure/clojurewerkz/cassaforte/query.clj
-+++ src/clojure/clojurewerkz/cassaforte/query.clj
-@@ -578,7 +578,7 @@
-                         (reduce
+diff --git a/src/clojure/clojurewerkz/cassaforte/query.clj b/src/clojure/clojurewerkz/cassaforte/query.clj
+index 0899355..1a4783c 100644
+--- a/src/clojure/clojurewerkz/cassaforte/query.clj
++++ b/src/clojure/clojurewerkz/cassaforte/query.clj
+@@ -481,8 +481,7 @@
                           (fn [opts [option-name option-vals]]
-                            ((resolve-create-keyspace-option option-name) opts option-vals))
--                         (.withOptions query-builder)
-+                         (.with query-builder)
-                          options))
-        :if-not-exists (fn if-not-exists-query [query-builder _]
-                         (.ifNotExists query-builder))}]
-@@ -597,7 +597,7 @@
-                         (reduce
-                          (fn [opts [option-name option-vals]]
-                            ((resolve-create-keyspace-option option-name) opts option-vals))
--                         (.withOptions query-builder)
-+                         (.with query-builder)
-                          options))}]
-   (defn alter-keyspace
-     [keyspace-name & statements]
+                            ((resolve-alter-option option-name) opts option-vals))
+                          (.withOptions query-builder)
+-                         options)
+-                        query-builder)
++                         options))
 ```
   - Then, `lein install`
 
