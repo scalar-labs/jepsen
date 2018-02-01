@@ -57,8 +57,21 @@
 (deftest ^:clock lwt-clock-drift-decommission
   (run-test! clock-drift-test-decommission))
 
-(deftest ^:lwt ^:decommission lwt-crash-subset-mix
+;; Bootstrapping and Decommission tests
+(deftest ^:lwt ^:mix lwt-bridge-mix
+  (run-test! bridge-test-mix))
+
+(deftest ^:lwt ^:mix lwt-isolate-node-mix
+  (run-test! isolate-node-test-mix))
+
+(deftest ^:lwt ^:mix lwt-halves-mix
+  (run-test! halves-test-mix))
+
+(deftest ^:lwt ^:mix lwt-isolate-node-mix
+  (run-test! isolate-node-test-mix))
+
+(deftest ^:lwt ^:mix lwt-crash-subset-mix
   (run-test! crash-subset-test-mix))
 
-(deftest ^:lwt ^:decommission lwt-isolate-node-mix
-  (run-test! isolate-node-test-mix))
+(deftest ^:clock lwt-clock-drift-mix
+  (run-test! clock-drift-test-mix))
