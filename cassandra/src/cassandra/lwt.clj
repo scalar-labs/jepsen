@@ -221,14 +221,32 @@
                      {:nemesis (nemesis/clock-scrambler 10000)
                       :decommissioner true}))
 
-(def crash-subset-test-mix
-  (cas-register-test "crash bootstrap and decommission"
+(def bridge-test-mix
+  (cas-register-test "bridge bootstrap and decommission"
                      {:bootstrap (atom #{"n5"})
-                      :nemesis (crash-nemesis)
+                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                      :decommissioner true}))
+
+(def halves-test-mix
+  (cas-register-test "halves bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-halves)
                       :decommissioner true}))
 
 (def isolate-node-test-mix
   (cas-register-test "crash bootstrap and decommission"
                      {:bootstrap (atom #{"n5"})
                       :nemesis (nemesis/partition-random-node)
+                      :decommissioner true}))
+
+(def crash-subset-test-mix
+  (cas-register-test "crash bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (crash-nemesis)
+                      :decommissioner true}))
+
+(def clock-drift-test-mix
+  (cas-register-test "clock drift bootstrap"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/clock-scrambler 10000)
                       :decommissioner true}))

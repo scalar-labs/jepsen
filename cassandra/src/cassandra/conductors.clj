@@ -36,10 +36,8 @@
     (invoke! [this test op]
       (let [decommission (:decommission test)
             bootstrap (:bootstrap test)]
-        (if-let [node (->> (some-> test cassandra/live-nodes (set/difference @decommission)
-                              shuffle (get 3)) ; keep at least RF nodes
-                           (.indexOf (map cassandra/dns-resolve (:nodes test)))
-                           (get (:nodes test)))]
+        (if-let [node (some-> test cassandra/live-nodes (set/difference @decommission)
+                         shuffle (get 3))] ; keep at least RF nodes
           (do (info node "decommissioning")
               (info @decommission "already decommissioned")
               (swap! decommission conj node)
