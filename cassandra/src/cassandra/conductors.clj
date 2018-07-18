@@ -72,26 +72,27 @@
         :stop (assoc op :value "stop is a no-op with this nemesis")))
     (teardown! [this test] this)))
 
-(defn flexible-partitioner
-  "Responds to a :start operation by cutting network links as defined by
-  (grudge nodes), and responds to :stop by healing the network. Uses
-  :grudge entry in op to determine grudge function used."
-  [grudge-map]
-  (reify client/Client
-    (setup! [this test _]
-      (net/heal! (:net test) test)
-      this)
-
-    (invoke! [this test op]
-      (case (:f op)
-        :start (let [grudge ((-> op :grudge grudge-map) (:nodes test))]
-                 (nemesis/partition! test grudge)
-                 (assoc op :value (str "Cut off " (pr-str grudge))))
-        :stop  (do (net/heal! (:net test) test)
-                   (assoc op :value "fully connected"))))
-
-    (teardown! [this test]
-      (net/heal! (:net test) test))))
+; TODO: Modify to support mv_test
+;(defn flexible-partitioner
+;  "Responds to a :start operation by cutting network links as defined by
+;  (grudge nodes), and responds to :stop by healing the network. Uses
+;  :grudge entry in op to determine grudge function used."
+;  [grudge-map]
+;  (reify client/Client
+;    (setup! [this test _]
+;      (net/heal! (:net test) test)
+;      this)
+;
+;    (invoke! [this test op]
+;      (case (:f op)
+;        :start (let [grudge ((-> op :grudge grudge-map) (:nodes test))]
+;                 (nemesis/partition! test grudge)
+;                 (assoc op :value (str "Cut off " (pr-str grudge))))
+;        :stop  (do (net/heal! (:net test) test)
+;                   (assoc op :value "fully connected"))))
+;
+;    (teardown! [this test]
+;      (net/heal! (:net test) test))))
 
 (defn mix-failure
   "Make a seq with start and stop for nemesis failure, and mix bootstrapping and decommissioning"
@@ -102,11 +103,11 @@
                  {:type :info :f :bootstrap})
         ops [decop bootop]]
     (concat
-      (->> (repeatedly #(vector (gen/sleep (rand-int 20))
+      (->> (repeatedly #(vector (gen/sleep (+ (rand-int 20) 1))
                                 {:type :info :f :start}
-                                (gen/sleep (rand-int 20))
+                                (gen/sleep (+ (rand-int 20) 1))
                                 (rand-nth ops)
-                                (gen/sleep (rand-int 20))
+                                (gen/sleep (+ (rand-int 20) 1))
                                 {:type :info :f :stop}))
            (take 60) flatten)
-      [(gen/sleep (rand-int 20))])))
+      [(gen/sleep (+ (rand-int 20) 1))])))
