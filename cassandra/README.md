@@ -3,7 +3,7 @@
 This is based on [riptano's jepsen](https://github.com/riptano/jepsen/tree/cassandra/cassandra).
 
 ## Current status
-- Support only `lwt` tests
+- Support only `collections.map-test` and `lwt-test`
 
 ## Starting the Docker Container
 
@@ -27,8 +27,40 @@ git clone https://github.com/clojurewerkz/cassaforte.git
 ```
   - Modify option methods as below in src/clojure/clojurewerkz/cassaforte/query.clj
 ```
+diff --git a/src/clojure/clojurewerkz/cassaforte/conversion.clj b/src/clojure/clojurewerkz/cassaforte/conversion.clj
+index 46184b9..7427c33 100644
+--- a/src/clojure/clojurewerkz/cassaforte/conversion.clj
++++ b/src/clojure/clojurewerkz/cassaforte/conversion.clj
+@@ -32,18 +32,15 @@
+                                               (if (< (inc i) (.size cd))
+                                                 (recur (assoc row-data (keyword name) value) (inc i))
+                                                 (assoc row-data (keyword name) value)))))))
+-    (instance? Map java-val)       (let [t (transient {})]
+-                                     (doseq [[k v] java-val]
+-                                       (assoc! t k v))
+-                                     (persistent! t))
+-    (instance? Set java-val)       (let [t (transient #{})]
+-                                     (doseq [v java-val]
+-                                       (conj! t v))
+-                                     (persistent! t))
+-    (instance? List java-val)      (let [t (transient [])]
+-                                     (doseq [v java-val]
+-                                       (conj! t v))
+-                                     (persistent! t))
++    (instance? Map java-val)       (persistent!
++                                     (reduce (fn [t [k v]] (assoc! t k v))
++                                             (transient {}) java-val))
++    (instance? Set java-val)       (persistent!
++                                     (reduce (fn [t v] (conj! t v))
++                                             (transient #{}) java-val))
++    (instance? List java-val)      (persistent!
++                                     (reduce (fn [t [k v]] (conj! t v))
++                                             (transient []) java-val))
+     (instance? Host java-val)      (let [^Host host java-val]
+                                      {:datacenter (.getDatacenter host)
+                                       :address    (.getHostAddress (.getAddress host))
 diff --git a/src/clojure/clojurewerkz/cassaforte/query.clj b/src/clojure/clojurewerkz/cassaforte/query.clj
-index 0899355..1a4783c 100644
+index 0899355..d6fbcee 100644
 --- a/src/clojure/clojurewerkz/cassaforte/query.clj
 +++ b/src/clojure/clojurewerkz/cassaforte/query.clj
 @@ -481,8 +481,7 @@
@@ -38,6 +70,9 @@ index 0899355..1a4783c 100644
 -                         options)
 -                        query-builder)
 +                         options))
+ 
+ 
+        :add-column    (fn add-column-statement [query-builder [column-name column-type]]
 ```
   - Then, `lein install`
 
