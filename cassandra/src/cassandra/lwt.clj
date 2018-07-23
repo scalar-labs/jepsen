@@ -131,21 +131,10 @@
                           :model (model/cas-register)
                           :generator (gen/phases
                                       (->> [r w cas cas cas]
-                                           gen/mix
-                                           (gen/stagger 1/5)
-                                           (gen/delay 2)
-                                           (gen/nemesis
-                                            (gen/seq (cycle (conductors/mix-failure opts))))
-                                           (gen/time-limit 60)))
+                                           (conductors/std-gen opts 60)))
                           :checker (checker/compose
                                     {:linear (checker/linearizable)})})
-         (assoc opts :nemesis
-                 (nemesis/compose
-                   (conj {#{:start :stop} (:nemesis opts)}
-                         (when (:decommissioner opts)
-                           {#{:decommission} (conductors/decommissioner)})
-                         (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
-                                {#{:bootstrap} (conductors/bootstrapper)}))))))
+         (conductors/combine-nemesis opts)))
 
 (def bridge-test
   (cas-register-test "bridge"

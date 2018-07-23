@@ -9,7 +9,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -20,6 +19,7 @@
              [util :as net/util]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
+            [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
             [clojurewerkz.cassaforte.policies :refer :all]
@@ -27,7 +27,6 @@
             [cassandra.core :refer :all]
             [cassandra.conductors :as conductors])
   (:import (clojure.lang ExceptionInfo)
-           (com.datastax.driver.core ConsistencyLevel)
            (com.datastax.driver.core.exceptions UnavailableException
                                                 WriteTimeoutException
                                                 ReadTimeoutException
@@ -41,27 +40,29 @@
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
-                                    {:class "SimpleStrategy"
-                                     :replication_factor 3}}))
+                                    {"class" "SimpleStrategy"
+                                     "replication_factor" 3}}))
         (cql/use-keyspace conn "jepsen_keyspace")
         (cql/create-table conn "maps"
                           (if-not-exists)
                           (column-definitions {:id :int
                                                :elements (map-type :int :int)
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
+                                               :primary-key [:id]}))
+        ; @TODO change compaction storategy
+        (cql/alter-table conn "maps"
+                          (with {:compaction-options (compaction-strategy)}))
         (cql/insert conn "maps"
                     {:id 0
                      :elements {}})
         (->CQLMapClient conn writec))))
   (invoke! [this test op]
     (case (:f op)
-      :add (try (with-consistency-level writec
-                  (cql/update conn
-                              "maps"
-                              {:elements [+ {(:value op) (:value op)}]}
-                              (where [[= :id 0]])))
+      :add (try (cassandra/execute
+                  conn
+                  (str "UPDATE maps SET elements = elements + {"
+                       (:value op) " : " (:value op)
+                       "} WHERE id = 0;")
+                       :consistency-level (consistency-level writec))
                 (assoc op :type :ok)
                 (catch UnavailableException e
                   (assoc op :type :fail :value (.getMessage e)))
@@ -72,10 +73,11 @@
                   (Thread/sleep 2000)
                   (assoc op :type :fail :value (.getMessage e))))
       :read (try (wait-for-recovery 30 conn)
-                 (let [value (->> (with-retry-policy aggressive-read
-                                    (with-consistency-level ConsistencyLevel/ALL
-                                      (cql/select conn "maps"
-                                                  (where [[= :id 0]]))))
+                 (let [value (->> (cassandra/execute
+                                    conn
+                                    "SELECT * from maps WHERE id = 0;"
+                                    :consistency-level (consistency-level :all)
+                                    :retry-policy aggressive-read)
                                   first
                                   :elements
                                   vals
@@ -92,7 +94,7 @@
 
 (defn cql-map-client
   "A set implemented using CQL maps"
-  ([] (->CQLMapClient nil ConsistencyLevel/ONE))
+  ([] (->CQLMapClient nil :one))
   ([writec] (->CQLMapClient nil writec)))
 
 (defn cql-map-test
@@ -101,76 +103,70 @@
                          {:client (cql-map-client)
                           :model (model/set)
                           :generator (gen/phases
-                                      (->> (adds)
-                                           (gen/stagger 1/10)
-                                           (gen/delay 1/2)
-                                           std-gen)
+                                      (->> [(adds)]
+                                           (conductors/std-gen opts 60))
                                       (read-once))
                           :checker (checker/compose
-                                    {:set checker/set})})
-         opts))
+                                    {:set (checker/set)})})
+         (conductors/combine-nemesis opts)))
 
 (def bridge-test
   (cql-map-test "bridge"
-                {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
+                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test
   (cql-map-test "halves"
-                {:conductors {:nemesis (nemesis/partition-random-halves)}}))
+                {:nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test
   (cql-map-test "isolate node"
-                {:conductors {:nemesis (nemesis/partition-random-node)}}))
+                {:nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test
   (cql-map-test "crash"
-                {:conductors {:nemesis (crash-nemesis)}}))
+                {:nemesis (crash-nemesis)}))
 
 (def flush-compact-test
   (cql-map-test "flush and compact"
-                {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+                {:nemesis (conductors/flush-and-compacter)}))
 
 (def bridge-test-bootstrap
   (cql-map-test "bridge bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test-bootstrap
   (cql-map-test "halves bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partition-random-halves)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test-bootstrap
   (cql-map-test "isolate node bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partition-random-node)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test-bootstrap
   (cql-map-test "crash bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (crash-nemesis)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partition-random-node)}))
 
 (def bridge-test-decommission
   (cql-map-test "bridge decommission"
-                {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                 :decommissioner true}))
 
 (def halves-test-decommission
   (cql-map-test "halves decommission"
-                {:conductors {:nemesis (nemesis/partition-random-halves)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partition-random-halves)
+                 :decommissioner true}))
 
 (def isolate-node-test-decommission
   (cql-map-test "isolate node decommission"
-                {:conductors {:nemesis (nemesis/partition-random-node)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partition-random-node)
+                 :decommissioner true}))
 
 (def crash-subset-test-decommission
   (cql-map-test "crash decommission"
-                {:client (cql-map-client ConsistencyLevel/QUORUM)
-                 :conductors {:nemesis (crash-nemesis)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:client (cql-map-client :quorum)
+                 :nemesis (crash-nemesis)
+                 :decommissioner true}))

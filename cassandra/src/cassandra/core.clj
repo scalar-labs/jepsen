@@ -301,54 +301,6 @@
     (log-files [db test node]
       ["~/cassandra/logs/system.log"])))
 
-(defn recover
-  "A generator which stops the nemesis and allows some time for recovery."
-  []
-  (gen/nemesis
-   (gen/phases
-    (gen/once {:type :info, :f :stop})
-    (gen/sleep 10))))
-
-(defn conductor
-  "Combines a generator of normal operations and a generator for a conductor.
-  The name of the conductor is given."
-  ([conductor conductor-gen]
-   (gen/on #{conductor} conductor-gen))
-  ([conductor conductor-gen src-gen]
-   (gen/concat (gen/on #{conductor} conductor-gen)
-           (gen/on (complement #{conductor}) src-gen))))
-
-(defn bootstrap
-  "A generator that bootstraps nodes into the cluster with the given pause
-  and routes other :op's onward."
-  [pause src-gen]
-  (conductor :bootstrapper
-                 (gen/seq (cycle [(gen/sleep pause)
-                                  {:type :info :f :bootstrap}]))
-                 src-gen))
-
-(defn std-gen
-  "Takes a client generator and wraps it in a typical schedule and nemesis
-  causing failover."
-  ([gen] (std-gen 400 gen))
-  ([duration gen]
-   (gen/phases
-    (->> gen
-         (gen/nemesis
-          (gen/seq (cycle [(gen/sleep (scaled 20))
-                           {:type :info :f :start}
-                           (gen/sleep (scaled 60))
-                           {:type :info :f :stop}])))
-         (bootstrap 120)
-         (conductor :decommissioner
-                        (gen/seq (cycle [(gen/sleep (scaled 100))
-                                         {:type :info :f :decommission}])))
-         (gen/time-limit (scaled duration)))
-    (recover)
-    (gen/clients
-     (->> gen
-          (gen/time-limit (scaled 40)))))))
-
 (def add {:type :invoke :f :add :value 1})
 (def sub {:type :invoke :f :add :value -1})
 (def r {:type :invoke :f :read})

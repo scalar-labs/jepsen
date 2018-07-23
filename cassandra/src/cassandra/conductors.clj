@@ -111,3 +111,29 @@
                                 {:type :info :f :stop}))
            (take 60) flatten)
       [(gen/sleep (+ (rand-int 20) 1))])))
+
+(defn mix-failure-seq
+  [opts]
+  (gen/seq (cycle (mix-failure opts))))
+
+(defn combine-nemesis
+  "Combine nemesis options with bootstrapper and decommissioner"
+  [opts]
+  (assoc opts :nemesis
+         (nemesis/compose
+           (conj {#{:start :stop} (:nemesis opts)}
+                 (when (:decommissioner opts)
+                   {#{:decommission} (decommissioner)})
+                 (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
+                   {#{:bootstrap} (bootstrapper)})))))
+
+(defn std-gen
+  ([opts gen] (std-gen opts 300 gen))
+  ([opts duration gen]
+   (->> gen
+        gen/mix
+        (gen/stagger 1/5)
+        (gen/delay 2)
+        (gen/nemesis
+          (mix-failure-seq opts))
+        (gen/time-limit duration))))
