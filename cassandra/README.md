@@ -20,12 +20,14 @@ VBoxManage modifyvm default --memory 4096
 ## Environment Setup (within Docker container)
 
 - Change Cassandra wrapper `Cassaforte` for Cassandra 3.x
-  - Cassaforte
+  - Modify converter as below in src/clojure/clojurewerkz/cassaforte/conversion.clj
+  - Modify option methods in src/clojure/clojurewerkz/cassaforte/query.clj
+
 ```
 cd ~
 git clone https://github.com/clojurewerkz/cassaforte.git
 ```
-  - Modify option methods as below in src/clojure/clojurewerkz/cassaforte/query.clj
+
 ```
 diff --git a/src/clojure/clojurewerkz/cassaforte/conversion.clj b/src/clojure/clojurewerkz/cassaforte/conversion.clj
 index 46184b9..7427c33 100644
@@ -74,7 +76,8 @@ index 0899355..d6fbcee 100644
  
         :add-column    (fn add-column-statement [query-builder [column-name column-type]]
 ```
-  - Then, `lein install`
+
+- Then, `lein install` Cassaforte
 
 ## Running Tests
 

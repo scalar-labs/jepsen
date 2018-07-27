@@ -9,7 +9,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -20,6 +19,7 @@
              [util :as net/util]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
+            [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
             [clojurewerkz.cassaforte.policies :refer :all]
@@ -41,16 +41,17 @@
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
-                                    {:class "SimpleStrategy"
-                                     :replication_factor 3}}))
+                                    {"class" "SimpleStrategy"
+                                     "replication_factor" 3}}))
         (cql/use-keyspace conn "jepsen_keyspace")
         (cql/create-table conn "sets"
                           (if-not-exists)
                           (column-definitions {:id :int
                                                :elements (set-type :int)
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
+                                               :primary-key [:id]}))
+        ; @TODO change compaction storategy
+        (cql/alter-table conn "sets"
+                          (with {:compaction-options (compaction-strategy)}))
         (cql/insert conn "sets"
                     {:id 0
                      :elements #{}}
@@ -58,11 +59,12 @@
         (->CQLSetClient conn writec))))
   (invoke! [this test op]
     (case (:f op)
-      :add (try (with-consistency-level writec
-                  (cql/update conn
-                              "sets"
-                              {:elements [+ #{(:value op)}]}
-                              (where [[= :id 0]])))
+      :add (try (cassandra/execute
+                  conn
+                  (str "UPDATE sets SET elements = elements + {"
+                       (:value op)
+                       "} WHERE id = 0;")
+                  :consistency-level (consistency-level writec))
                 (assoc op :type :ok)
                 (catch UnavailableException e
                   (assoc op :type :fail :value (.getMessage e)))
@@ -73,10 +75,11 @@
                   (Thread/sleep 2000)
                   (assoc op :type :fail :value (.getMessage e))))
       :read (try (wait-for-recovery 30 conn)
-                 (let [value (->> (with-retry-policy aggressive-read
-                                    (with-consistency-level ConsistencyLevel/ALL
-                                      (cql/select conn "sets"
-                                                  (where [[= :id 0]]))))
+                 (let [value (->> (cassandra/execute
+                                    conn
+                                    "SELECT * from sets WHERE id = 0;"
+                                    :consistency-level (consistency-level :all)
+                                    :retry-policy aggressive-read)
                                   first
                                   :elements
                                   (into (sorted-set)))]
@@ -105,76 +108,94 @@
                          {:client (cql-set-client)
                           :model (model/set)
                           :generator (gen/phases
-                                      (->> (adds)
-                                           (gen/stagger 1/10)
-                                           (gen/delay 1/2)
-                                           std-gen)
+                                      (->> [(adds)]
+                                           (conductors/std-gen opts 60))
                                       (read-once))
                           :checker (checker/compose
-                                    {:set checker/set})})
-         opts))
+                                    {:set (checker/set)})})
+         (conductors/combine-nemesis opts)))
 
 (def bridge-test
   (cql-set-test "bridge"
-                {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
+                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test
   (cql-set-test "halves"
-                {:conductors {:nemesis (nemesis/partition-random-halves)}}))
+                {:nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test
   (cql-set-test "isolate node"
-                {:conductors {:nemesis (nemesis/partition-random-node)}}))
+                {:nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test
   (cql-set-test "crash"
-                {:conductors {:nemesis (crash-nemesis)}}))
+                {:nemesis (crash-nemesis)}))
 
 (def flush-compact-test
   (cql-set-test "flush and compact"
-                {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+                {:nemesis (conductors/flush-and-compacter)}))
 
 (def bridge-test-bootstrap
   (cql-set-test "bridge bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test-bootstrap
   (cql-set-test "halves bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partition-random-halves)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test-bootstrap
   (cql-set-test "isolate node bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (nemesis/partition-random-node)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test-bootstrap
   (cql-set-test "crash bootstrap"
-                {:bootstrap (atom #{:n4 :n5})
-                 :conductors {:nemesis (crash-nemesis)
-                              :bootstrapper (conductors/bootstrapper)}}))
+                {:bootstrap (atom #{"n4" "n5"})
+                 :nemesis (crash-nemesis)}))
 
 (def bridge-test-decommission
   (cql-set-test "bridge decommission"
-                {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                 :decommissioner true}))
 
 (def halves-test-decommission
   (cql-set-test "halves decommission"
-                {:conductors {:nemesis (nemesis/partition-random-halves)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partition-random-halves)
+                 :decommissioner true}))
 
 (def isolate-node-test-decommission
   (cql-set-test "isolate node decommission"
-                {:conductors {:nemesis (nemesis/partition-random-node)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:nemesis (nemesis/partition-random-node)
+                 :decommissioner true}))
 
 (def crash-subset-test-decommission
   (cql-set-test "crash decommission"
-                {:client (cql-set-client ConsistencyLevel/QUORUM)
-                 :conductors {:nemesis (crash-nemesis)
-                              :decommissioner (conductors/decommissioner)}}))
+                {:client (cql-set-client :quorum)
+                 :nemesis (crash-nemesis)
+                 :decommissioner true}))
+
+(def bridge-test-mix
+  (cql-set-test "bridge bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                      :decommissioner true}))
+
+(def halves-test-mix
+  (cql-set-test "halves bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-halves)
+                      :decommissioner true}))
+
+(def isolate-node-test-mix
+  (cql-set-test "isolate node bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-node)
+                      :decommissioner true}))
+
+(def crash-subset-test-mix
+  (cql-set-test "crash bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (crash-nemesis)
+                      :decommissioner true}))

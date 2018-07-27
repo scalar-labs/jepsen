@@ -223,7 +223,7 @@
                       :decommissioner true}))
 
 (def isolate-node-test-mix
-  (cas-register-test "crash bootstrap and decommission"
+  (cas-register-test "isolate node  bootstrap and decommission"
                      {:bootstrap (atom #{"n5"})
                       :nemesis (nemesis/partition-random-node)
                       :decommissioner true}))
@@ -235,7 +235,7 @@
                       :decommissioner true}))
 
 (def clock-drift-test-mix
-  (cas-register-test "clock drift bootstrap"
+  (cas-register-test "clock drift bootstrap and decommission"
                      {:bootstrap (atom #{"n5"})
                       :nemesis (nemesis/clock-scrambler 10000)
                       :decommissioner true}))

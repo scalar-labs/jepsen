@@ -44,3 +44,15 @@
 
 (deftest ^:set ^:decommission cql-set-crash-subset-decommission
   (run-test! crash-subset-test-decommission))
+
+(deftest ^:set ^:mix cql-map-bridge-mix
+  (run-test! bridge-test-mix))
+
+(deftest ^:set ^:mix cql-map-halves-mix
+  (run-test! halves-test-mix))
+
+(deftest ^:set ^:mix cql-map-isolate-node-mix
+  (run-test! isolate-node-test-mix))
+
+(deftest ^:set ^:mix cql-map-crash-subset
+  (run-test! crash-subset-test-mix))

@@ -62,7 +62,7 @@
                   (str "UPDATE maps SET elements = elements + {"
                        (:value op) " : " (:value op)
                        "} WHERE id = 0;")
-                       :consistency-level (consistency-level writec))
+                  :consistency-level (consistency-level writec))
                 (assoc op :type :ok)
                 (catch UnavailableException e
                   (assoc op :type :fail :value (.getMessage e)))
@@ -148,7 +148,7 @@
 (def crash-subset-test-bootstrap
   (cql-map-test "crash bootstrap"
                 {:bootstrap (atom #{"n4" "n5"})
-                 :nemesis (nemesis/partition-random-node)}))
+                 :nemesis (crash-nemesis)}))
 
 (def bridge-test-decommission
   (cql-map-test "bridge decommission"
@@ -170,3 +170,27 @@
                 {:client (cql-map-client :quorum)
                  :nemesis (crash-nemesis)
                  :decommissioner true}))
+
+(def bridge-test-mix
+  (cql-map-test "bridge bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                      :decommissioner true}))
+
+(def halves-test-mix
+  (cql-map-test "halves bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-halves)
+                      :decommissioner true}))
+
+(def isolate-node-test-mix
+  (cql-map-test "isolate node bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (nemesis/partition-random-node)
+                      :decommissioner true}))
+
+(def crash-subset-test-mix
+  (cql-map-test "crash bootstrap and decommission"
+                     {:bootstrap (atom #{"n5"})
+                      :nemesis (crash-nemesis)
+                      :decommissioner true}))

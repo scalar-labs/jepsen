@@ -101,20 +101,18 @@
                 {:type :info :f :decommission})
         bootop (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
                  {:type :info :f :bootstrap})
-        ops [decop bootop]]
-    (concat
-      (->> (repeatedly #(vector (gen/sleep (+ (rand-int 20) 1))
-                                {:type :info :f :start}
-                                (gen/sleep (+ (rand-int 20) 1))
-                                (rand-nth ops)
-                                (gen/sleep (+ (rand-int 20) 1))
-                                {:type :info :f :stop}))
-           (take 60) flatten)
-      [(gen/sleep (+ (rand-int 20) 1))])))
+        ops [decop bootop]
+        base [(gen/sleep (+ (rand-int 20) 1))
+              {:type :info :f :start}
+              (gen/sleep (+ (rand-int 20) 1))
+              {:type :info :f :stop}]]
+    (if-let [op (rand-nth ops)]
+      (conj base (gen/sleep (+ (rand-int 20) 1)) op)
+      base)))
 
 (defn mix-failure-seq
   [opts]
-  (gen/seq (cycle (mix-failure opts))))
+  (gen/seq (flatten (repeatedly #(mix-failure opts)))))
 
 (defn combine-nemesis
   "Combine nemesis options with bootstrapper and decommissioner"
@@ -133,7 +131,6 @@
    (->> gen
         gen/mix
         (gen/stagger 1/5)
-        (gen/delay 2)
         (gen/nemesis
           (mix-failure-seq opts))
         (gen/time-limit duration))))
