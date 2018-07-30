@@ -56,3 +56,18 @@
 
 (deftest ^:clock batch-clock-drift-decommission
   (run-test! clock-drift-test-decommission))
+
+(deftest ^:batch ^:mix batch-bridge-mix
+  (run-test! bridge-test-mix))
+
+(deftest ^:batch ^:mix batch-halves-mix
+  (run-test! halves-test-mix))
+
+(deftest ^:batch ^:mix batch-isolate-node-mix
+  (run-test! isolate-node-test-mix))
+
+(deftest ^:batch ^:mix batch-crash-subset-mix
+  (run-test! crash-subset-test-mix))
+
+(deftest ^:batch ^:clock ^:mix batch-clock-drift-mix
+  (run-test! clock-drift-test-mix))

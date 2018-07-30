@@ -11,7 +11,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -22,12 +21,12 @@
              [util :as net/util]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
+            [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
             [clojurewerkz.cassaforte.policies :refer :all]
             [clojurewerkz.cassaforte.cql :as cql]
             [cassandra.core :refer :all]
-            [cassandra.checker :as extra-checker]
             [cassandra.conductors :as conductors])
   (:import (clojure.lang ExceptionInfo)
            (com.datastax.driver.core ConsistencyLevel)
@@ -44,33 +43,31 @@
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
-                                    {:class "SimpleStrategy"
-                                     :replication_factor 3}}))
+                                    {"class" "SimpleStrategy"
+                                     "replication_factor" 3}}))
         (cql/use-keyspace conn "jepsen_keyspace")
-        (cql/create-table conn "a"
+        (cql/create-table conn "bat"
                           (if-not-exists)
-                          (column-definitions {:id :int
+                          (column-definitions {:pid :int
+                                               :cid :int
                                                :value :int
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
-        (cql/create-table conn "b"
-                          (if-not-exists)
-                          (column-definitions {:id :int
-                                               :value :int
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
+                                               :primary-key [:pid :cid]}))
+        ; @TODO change compaction storategy
+        (cql/alter-table conn "bat"
+                          (with {:compaction-options (compaction-strategy)}))
         (->BatchSetClient conn))))
   (invoke! [this test op]
     (case (:f op)
       :add (try (let [value (:value op)]
-                  (with-consistency-level ConsistencyLevel/QUORUM
-                    (cql/atomic-batch conn (queries
-                                            (insert-query "a" {:id value
-                                                               :value value})
-                                            (insert-query "b" {:id (- value)
-                                                               :value value})))))
+                  (cassandra/execute
+                    conn
+                    (str "BEGIN BATCH "
+                         "INSERT INTO bat (pid, cid, value) VALUES ("
+                         value ", 0," value "); "
+                         "INSERT INTO bat (pid, cid, value) VALUES ("
+                         value ", 1," value "); "
+                         "APPLY BATCH;")
+                    :consistency-level (consistency-level :quorum)))
                 (assoc op :type :ok)
                 (catch UnavailableException e
                   (assoc op :type :fail :value (.getMessage e)))
@@ -80,14 +77,17 @@
                   (info "All nodes are down - sleeping 2s")
                   (Thread/sleep 2000)
                   (assoc op :type :fail :value (.getMessage e))))
-      :read (try (let [value-a (->> (with-retry-policy aggressive-read
-                                      (with-consistency-level ConsistencyLevel/ALL
-                                        (cql/select conn "a")))
+      :read (try (let [results (cassandra/execute
+                                 conn
+                                 "SELECT * from bat"
+                                 :consistency-level (consistency-level :all)
+                                 :retry-policy aggressive-read)
+                       value-a (->> results
+                                    (filter (fn [r] (= (:cid r) 0)))
                                     (map :value)
                                     (into (sorted-set)))
-                       value-b (->> (with-retry-policy aggressive-read
-                                      (with-consistency-level ConsistencyLevel/ALL
-                                        (cql/select conn "b")))
+                       value-b (->> results
+                                    (filter (fn [r] (= (:cid r) 1)))
                                     (map :value)
                                     (into (sorted-set)))]
                    (if-not (= value-a value-b)
@@ -117,91 +117,114 @@
                          {:client (batch-set-client)
                           :model (model/set)
                           :generator (gen/phases
-                                      (->> (gen/clients (adds))
-                                           (gen/delay 1)
-                                           std-gen)
-                                      (gen/delay 65
+                                      (->> [(adds)]
+                                           (conductors/std-gen opts 60))
+                                      (gen/delay 5
                                                  (read-once)))
                           :checker (checker/compose
-                                    {:set checker/set})})
-         (merge-with merge {:conductors {:replayer (conductors/replayer)}} opts)))
+                                    {:set (checker/set)})})
+         (conductors/combine-nemesis opts)))
 
 (def bridge-test
   (batch-set-test "bridge"
-                  {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
+                  {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test
-
   (batch-set-test "halves"
-                  {:conductors {:nemesis (nemesis/partition-random-halves)}}))
+                  {:nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test
   (batch-set-test "isolate node"
-                  {:conductors {:nemesis (nemesis/partition-random-node)}}))
+                  {:nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test
   (batch-set-test "crash"
-                  {:conductors {:nemesis (crash-nemesis)}}))
+                  {:nemesis (crash-nemesis)}))
 
 (def clock-drift-test
   (batch-set-test "clock drift"
-                  {:conductors {:nemesis (nemesis/clock-scrambler 10000)}}))
+                  {:nemesis (nemesis/clock-scrambler 10000)}))
 
 (def flush-compact-test
   (batch-set-test "flush and compact"
-                  {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+                  {:nemesis (conductors/flush-and-compacter)}))
 
 (def bridge-test-bootstrap
   (batch-set-test "bridge bootstrap"
-                  {:bootstrap (atom #{:n4 :n5})
-                   :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                :bootstrapper (conductors/bootstrapper)}}))
+                  {:bootstrap (atom #{"n4" "n5"})
+                   :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-test-bootstrap
   (batch-set-test "halves bootstrap"
-                  {:bootstrap (atom #{:n4 :n5})
-                   :conductors {:nemesis (nemesis/partition-random-halves)
-                                :bootstrapper (conductors/bootstrapper)}}))
+                  {:bootstrap (atom #{"n4" "n5"})
+                   :nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-test-bootstrap
   (batch-set-test "isolate node bootstrap"
-                  {:bootstrap (atom #{:n4 :n5})
-                   :conductors {:nemesis (nemesis/partition-random-node)
-                                :bootstrapper (conductors/bootstrapper)}}))
+                  {:bootstrap (atom #{"n4" "n5"})
+                   :nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-test-bootstrap
   (batch-set-test "crash bootstrap"
-                  {:bootstrap (atom #{:n4 :n5})
-                   :conductors {:nemesis (crash-nemesis)
-                                :bootstrapper (conductors/bootstrapper)}}))
+                  {:bootstrap (atom #{"n4" "n5"})
+                   :nemesis (crash-nemesis)}))
 
 (def clock-drift-test-bootstrap
   (batch-set-test "clock drift bootstrap"
-                  {:bootstrap (atom #{:n4 :n5})
-                   :conductors {:nemesis (nemesis/clock-scrambler 10000)
-                                :bootstrapper (conductors/bootstrapper)}}))
+                  {:bootstrap (atom #{"n4" "n5"})
+                   :nemesis (nemesis/clock-scrambler 10000)}))
 
 (def bridge-test-decommission
   (batch-set-test "bridge decommission"
-                  {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                :decommissioner (conductors/decommissioner)}}))
+                  {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                   :decommissioner true}))
 
 (def halves-test-decommission
   (batch-set-test "halves decommission"
-                  {:conductors {:nemesis (nemesis/partition-random-halves)
-                                :decommissioner (conductors/decommissioner)}}))
+                  {:nemesis (nemesis/partition-random-halves)
+                   :decommissioner true}))
 
 (def isolate-node-test-decommission
   (batch-set-test "isolate node decommission"
-                  {:conductors {:nemesis (nemesis/partition-random-node)
-                                :decommissioner (conductors/decommissioner)}}))
+                  {:nemesis (nemesis/partition-random-node)
+                   :decommissioner true}))
 
 (def crash-subset-test-decommission
   (batch-set-test "crash decommission"
-                  {:conductors {:nemesis (crash-nemesis)
-                                :decommissioner (conductors/decommissioner)}}))
+                  {:nemesis (crash-nemesis)
+                   :decommissioner true}))
 
 (def clock-drift-test-decommission
   (batch-set-test "clock drift decommission"
-                  {:conductors {:nemesis (nemesis/clock-scrambler 10000)
-                                :decommissioner (conductors/decommissioner)}}))
+                  {:nemesis (nemesis/clock-scrambler 10000)
+                   :decommissioner true}))
+
+(def bridge-test-mix
+  (batch-set-test "bridge bootstrap and decommission"
+                  {:bootstrap (atom #{"n5"})
+                   :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                   :decommissioner true}))
+
+(def halves-test-mix
+  (batch-set-test "halves bootstrap and decommission"
+                  {:bootstrap (atom #{"n5"})
+                   :nemesis (nemesis/partition-random-halves)
+                   :decommissioner true}))
+
+(def isolate-node-test-mix
+  (batch-set-test "isolate node  bootstrap and decommission"
+                  {:bootstrap (atom #{"n5"})
+                   :nemesis (nemesis/partition-random-node)
+                   :decommissioner true}))
+
+(def crash-subset-test-mix
+  (batch-set-test "crash bootstrap and decommission"
+                  {:bootstrap (atom #{"n5"})
+                   :nemesis (crash-nemesis)
+                   :decommissioner true}))
+
+(def clock-drift-test-mix
+  (batch-set-test "clock drift bootstrap and decommission"
+                  {:bootstrap (atom #{"n5"})
+                   :nemesis (nemesis/clock-scrambler 10000)
+                   :decommissioner true}))
