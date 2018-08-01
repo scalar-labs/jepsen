@@ -3,7 +3,7 @@
 This is based on [riptano's jepsen](https://github.com/riptano/jepsen/tree/cassandra/cassandra).
 
 ## Current status
-- Support only `collections.map-test`, `collections.set-test`, `batch-test` and `lwt-test`
+- Support only `collections.map-test`, `collections.set-test`, `batch-test`, `counter-test`(only add) and `lwt-test`
 
 ## Starting the Docker Container
 

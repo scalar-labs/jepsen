@@ -83,11 +83,11 @@
                                  :consistency-level (consistency-level :all)
                                  :retry-policy aggressive-read)
                        value-a (->> results
-                                    (filter (fn [r] (= (:cid r) 0)))
+                                    (filter (fn [ret] (= (:cid ret) 0)))
                                     (map :value)
                                     (into (sorted-set)))
                        value-b (->> results
-                                    (filter (fn [r] (= (:cid r) 1)))
+                                    (filter (fn [ret] (= (:cid ret) 1)))
                                     (map :value)
                                     (into (sorted-set)))]
                    (if-not (= value-a value-b)
@@ -212,7 +212,7 @@
                    :decommissioner true}))
 
 (def isolate-node-test-mix
-  (batch-set-test "isolate node  bootstrap and decommission"
+  (batch-set-test "isolate node bootstrap and decommission"
                   {:bootstrap (atom #{"n5"})
                    :nemesis (nemesis/partition-random-node)
                    :decommissioner true}))

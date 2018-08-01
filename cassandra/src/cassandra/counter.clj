@@ -9,7 +9,6 @@
              [control   :as c :refer [| lit]]
              [client    :as client]
              [checker   :as checker]
-             [model     :as model]
              [generator :as gen]
              [nemesis   :as nemesis]
              [store     :as store]
@@ -42,50 +41,52 @@
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
-                                    {:class "SimpleStrategy"
-                                     :replication_factor 3}}))
+                                    {"class" "SimpleStrategy"
+                                     "replication_factor" 3}}))
         (cql/use-keyspace conn "jepsen_keyspace")
         (cql/create-table conn "counters"
                           (if-not-exists)
                           (column-definitions {:id :int
                                                :count :counter
-                                               :primary-key [:id]})
-                          (with {:compaction
-                                 {:class (compaction-strategy)}}))
+                                               :primary-key [:id]}))
+        ; @TODO change compaction storategy
+        (cql/alter-table conn "counters"
+                          (with {:compaction-options (compaction-strategy)}))
         (cql/update conn "counters" {:count (increment-by 0)}
                     (where [[= :id 0]]))
         (->CQLCounterClient conn writec))))
   (invoke! [this test op]
     (case (:f op)
-      :add (try (do
-                  (with-retry-policy FallthroughRetryPolicy/INSTANCE
-                    (with-consistency-level writec
-                      (cql/update conn
-                                  "counters"
-                                  {:count (increment-by (:value op))}
-                                  (where [[= :id 0]]))))
-                  (assoc op :type :ok))
+      :add (try (let [value (:value op)
+                      added (if (pos? value) (str "+" value) (str value))]
+                  (cassandra/execute
+                    conn
+                    (str "UPDATE counters SET count = "
+                         "count " added " WHERE id = 0;")
+                    :consistency-level (consistency-level writec)
+                    :retry-policy FallthroughRetryPolicy/INSTANCE))
+                  (assoc op :type :ok)
                 (catch UnavailableException e
                   (assoc op :type :fail :error (.getMessage e)))
                 (catch WriteTimeoutException e
-                  (assoc op :type :info :value :timed-out))
+                  (assoc op :type :fail :error :timed-out))
                 (catch NoHostAvailableException e
                   (info "All the servers are down - waiting 2s")
                   (Thread/sleep 2000)
                   (assoc op :type :fail :error (.getMessage e))))
-      :read (try (let [value (->> (with-retry-policy FallthroughRetryPolicy/INSTANCE
-                                    (with-consistency-level ConsistencyLevel/ALL
-                                      (cql/select conn
-                                                  "counters"
-                                                  (where [[= :id 0]]))))
+      :read (try (let [value (->> (cassandra/execute
+                                    conn
+                                    "SELECT * from counters WHERE id = 0;"
+                                    :consistency-level (consistency-level :all)
+                                    :retry-policy FallthroughRetryPolicy/INSTANCE)
                                   first
                                   :count)]
                    (assoc op :type :ok :value value))
                  (catch UnavailableException e
                    (info "Not enough replicas - failing")
-                   (assoc op :type :fail :value (.getMessage e)))
+                   (assoc op :type :fail :error (.getMessage e)))
                  (catch ReadTimeoutException e
-                   (assoc op :type :fail :value :timed-out))
+                   (assoc op :type :fail :error :timed-out))
                  (catch NoHostAvailableException e
                    (info "All the servers are down - waiting 2s")
                    (Thread/sleep 2000)
@@ -96,7 +97,7 @@
 
 (defn cql-counter-client
   "A counter implemented using CQL counters"
-  ([] (->CQLCounterClient nil ConsistencyLevel/ONE))
+  ([] (->CQLCounterClient nil :one))
   ([writec] (->CQLCounterClient nil writec)))
 
 (defn cql-counter-inc-test
@@ -106,154 +107,190 @@
                           :model nil
                           :generator (->> (repeat 100 add)
                                           (cons r)
-                                          gen/mix
-                                          (gen/delay 1/10)
-                                          std-gen)
+                                          (conductors/std-gen opts 60))
                           :checker (checker/compose
-                                    {:counter checker/counter})})
-         opts))
+                                    {:counter (checker/counter)})})
+         (conductors/combine-nemesis opts)))
 
-(defn cql-counter-inc-dec-test
-  [name opts]
-  (merge (cassandra-test (str "cql counter inc dec " name)
-                         {:client (cql-counter-client)
-                          :model nil
-                          :generator (->> (take 100 (cycle [add sub]))
-                                          (cons r)
-                                          gen/mix
-                                          (gen/delay 1/10)
-                                          std-gen)
-                          :checker (checker/compose
-                                    {:counter checker/counter})})
-         opts))
+;; TODO: check sub operations
+;(defn cql-counter-inc-dec-test
+;  [name opts]
+;  (merge (cassandra-test (str "cql counter inc dec " name)
+;                         {:client (cql-counter-client)
+;                          :model nil
+;                          :generator (->> (take 100 (cycle [add sub]))
+;                                          (cons r)
+;                                          (conductors/std-gen opts 60))
+;                          :checker (checker/compose
+;                                    {:counter (checker/counter)})})
+;         (conductors/combine-nemesis opts)))
 
 (def bridge-inc-test
   (cql-counter-inc-test "bridge"
-                        {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
+                        {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-inc-test
   (cql-counter-inc-test "halves"
-                        {:conductors {:nemesis (nemesis/partition-random-halves)}}))
+                        {:nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-inc-test
   (cql-counter-inc-test "isolate node"
-                        {:conductors {:nemesis (nemesis/partition-random-node)}}))
+                        {:nemesis (nemesis/partition-random-node)}))
 
 (def flush-compact-inc-test
   (cql-counter-inc-test "flush and compact"
-                  {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+                        {:nemesis (conductors/flush-and-compacter)}))
 
 (def crash-subset-inc-test
   (cql-counter-inc-test "crash"
-                        {:conductors {:nemesis (crash-nemesis)}}))
+                        {:nemesis (crash-nemesis)}))
 
-(def bridge-inc-dec-test
-  (cql-counter-inc-dec-test "bridge"
-                            {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}}))
-
-(def halves-inc-dec-test
-  (cql-counter-inc-dec-test "halves"
-                            {:conductors {:nemesis (nemesis/partition-random-halves)}}))
-
-(def isolate-node-inc-dec-test
-  (cql-counter-inc-dec-test "isolate node"
-                            {:conductors {:nemesis (nemesis/partition-random-node)}}))
-
-(def crash-subset-inc-dec-test
-  (cql-counter-inc-dec-test "crash"
-                            {:conductors {:nemesis (crash-nemesis)}}))
-
-(def flush-compact-inc-dec-test
-  (cql-counter-inc-dec-test "flush and compact"
-                            {:conductors {:nemesis (conductors/flush-and-compacter)}}))
+;(def bridge-inc-dec-test
+;  (cql-counter-inc-dec-test "bridge"
+;                            {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
+;
+;(def halves-inc-dec-test
+;  (cql-counter-inc-dec-test "halves"
+;                            {:nemesis (nemesis/partition-random-halves)}))
+;
+;(def isolate-node-inc-dec-test
+;  (cql-counter-inc-dec-test "isolate node"
+;                            {:nemesis (nemesis/partition-random-node)}))
+;
+;(def crash-subset-inc-dec-test
+;  (cql-counter-inc-dec-test "crash"
+;                            {:nemesis (crash-nemesis)}))
+;
+;(def flush-compact-inc-dec-test
+;  (cql-counter-inc-dec-test "flush and compact"
+;                            {:nemesis (conductors/flush-and-compacter)}))
 
 (def bridge-inc-test-bootstrap
   (cql-counter-inc-test "bridge bootstrap"
-                        {:bootstrap (atom #{:n4 :n5})
-                         :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                      :bootstrapper (conductors/bootstrapper)}}))
+                        {:bootstrap (atom #{"n4" "n5"})
+                         :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
 
 (def halves-inc-test-bootstrap
   (cql-counter-inc-test "halves bootstrap"
-                        {:bootstrap (atom #{:n4 :n5})
-                         :conductors {:nemesis (nemesis/partition-random-halves)
-                                      :bootstrapper (conductors/bootstrapper)}}))
+                        {:bootstrap (atom #{"n4" "n5"})
+                         :nemesis (nemesis/partition-random-halves)}))
 
 (def isolate-node-inc-test-bootstrap
   (cql-counter-inc-test "isolate node bootstrap"
-                        {:bootstrap (atom #{:n4 :n5})
-                         :conductors {:nemesis (nemesis/partition-random-node)
-                                      :bootstrapper (conductors/bootstrapper)}}))
+                        {:bootstrap (atom #{"n4" "n5"})
+                         :nemesis (nemesis/partition-random-node)}))
 
 (def crash-subset-inc-test-bootstrap
   (cql-counter-inc-test "crash bootstrap"
-                        {:bootstrap (atom #{:n4 :n5})
-                         :conductors {:nemesis (crash-nemesis)
-                                      :bootstrapper (conductors/bootstrapper)}}))
+                        {:bootstrap (atom #{"n4" "n5"})
+                         :nemesis (crash-nemesis)}))
 
-(def bridge-inc-dec-test-bootstrap
-  (cql-counter-inc-dec-test "bridge bootstrap"
-                            {:bootstrap (atom #{:n4 :n5})
-                             :conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                          :bootstrapper (conductors/bootstrapper)}}))
-
-(def halves-inc-dec-test-bootstrap
-  (cql-counter-inc-dec-test "halves bootstrap"
-                            {:bootstrap (atom #{:n4 :n5})
-                             :conductors {:nemesis (nemesis/partition-random-halves)
-                                          :bootstrapper (conductors/bootstrapper)}}))
-
-(def isolate-node-inc-dec-test-bootstrap
-  (cql-counter-inc-dec-test "isolate node bootstrap"
-                            {:bootstrap (atom #{:n4 :n5})
-                             :conductors {:nemesis (nemesis/partition-random-node)
-                                          :bootstrapper (conductors/bootstrapper)}}))
-
-(def crash-subset-inc-dec-test-bootstrap
-  (cql-counter-inc-dec-test "crash bootstrap"
-                            {:bootstrap (atom #{:n4 :n5})
-                             :conductors {:nemesis (crash-nemesis)
-                                          :bootstrapper (conductors/bootstrapper)}}))
+;(def bridge-inc-dec-test-bootstrap
+;  (cql-counter-inc-dec-test "bridge bootstrap"
+;                            {:bootstrap (atom #{"n4" "n5"})
+;                             :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
+;
+;(def halves-inc-dec-test-bootstrap
+;  (cql-counter-inc-dec-test "halves bootstrap"
+;                            {:bootstrap (atom #{"n4" "n5"})
+;                             :nemesis (nemesis/partition-random-halves)}))
+;
+;(def isolate-node-inc-dec-test-bootstrap
+;  (cql-counter-inc-dec-test "isolate node bootstrap"
+;                            {:bootstrap (atom #{"n4" "n5"})
+;                             :nemesis (nemesis/partition-random-node)}))
+;
+;(def crash-subset-inc-dec-test-bootstrap
+;  (cql-counter-inc-dec-test "crash bootstrap"
+;                            {:bootstrap (atom #{"n4" "n5"})
+;                             :nemesis (crash-nemesis)}))
 
 (def bridge-inc-test-decommission
   (cql-counter-inc-test "bridge decommission"
-                        {:conductors {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                                      :bootstrapper (conductors/bootstrapper)}}))
+                        {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                         :decommissioner true}))
 
 (def halves-inc-test-decommission
   (cql-counter-inc-test "halves decommission"
-                        {:conductors {:nemesis (nemesis/partition-random-halves)
-                                      :decommissioner (conductors/decommissioner)}}))
+                        {:nemesis (nemesis/partition-random-halves)
+                         :decommissioner true}))
 
 (def isolate-node-inc-test-decommission
   (cql-counter-inc-test "isolate node decommission"
-                        {:conductors {:nemesis (nemesis/partition-random-node)
-                                      :decommissioner (conductors/decommissioner)}}))
+                        {:nemesis (nemesis/partition-random-node)
+                         :decommissioner true}))
 
 (def crash-subset-inc-test-decommission
   (cql-counter-inc-test "crash decommission"
-                        {:client (cql-counter-client ConsistencyLevel/QUORUM)
-                         :conductors {:nemesis (crash-nemesis)
-                                      :decommissioner (conductors/decommissioner)}}))
+                        {:client (cql-counter-client :quorum)
+                         :nemesis (crash-nemesis)
+                         :decommissioner true}))
 
-(def bridge-inc-dec-test-decommission
-  (cql-counter-inc-dec-test "bridge decommission"
-                            {:conductors {:nemesis (nemesis/partitioner
-                                                    (comp nemesis/bridge shuffle))
-                                          :decommissioner (conductors/decommissioner)}}))
+;(def bridge-inc-dec-test-decommission
+;  (cql-counter-inc-dec-test "bridge decommission"
+;                            {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+;                             :decommissioner true}))
+;
+;(def halves-inc-dec-test-decommission
+;  (cql-counter-inc-dec-test "halves decommission"
+;                            {:nemesis (nemesis/partition-random-halves)
+;                             :decommissioner true}))
+;
+;(def isolate-node-inc-dec-test-decommission
+;  (cql-counter-inc-dec-test "isolate node decommission"
+;                            {:nemesis (nemesis/partition-random-node)
+;                             :decommissioner true}))
+;
+;(def crash-subset-inc-dec-test-decommission
+;  (cql-counter-inc-dec-test "crash decommission"
+;                            {:client (cql-counter-client :quorum)
+;                             :nemesis (crash-nemesis)
+;                             :decommissioner true}))
 
-(def halves-inc-dec-test-decommission
-  (cql-counter-inc-dec-test "halves decommission"
-                            {:conductors {:nemesis (nemesis/partition-random-halves)
-                                          :decommissioner (conductors/decommissioner)}}))
+(def bridge-inc-test-mix
+  (cql-counter-inc-test "bridge bootstrap and decommission"
+                        {:bootstrap (atom #{"n5"})
+                         :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+                         :decommissioner true}))
 
-(def isolate-node-inc-dec-test-decommission
-  (cql-counter-inc-dec-test "isolate node decommission"
-                            {:conductors {:nemesis (nemesis/partition-random-node)
-                                          :decommissioner (conductors/decommissioner)}}))
+(def halves-inc-test-mix
+  (cql-counter-inc-test "halves bootstrap and decommission"
+                        {:bootstrap (atom #{"n5"})
+                         :nemesis (nemesis/partition-random-halves)
+                         :decommissioner true}))
 
-(def crash-subset-inc-dec-test-decommission
-  (cql-counter-inc-dec-test "crash decommission"
-                            {:client (cql-counter-client ConsistencyLevel/QUORUM)
-                             :conductors {:nemesis (crash-nemesis)
-                                          :decommissioner (conductors/decommissioner)}}))
+(def isolate-node-inc-test-mix
+  (cql-counter-inc-test "isolate node bootstrap and decommission"
+                        {:bootstrap (atom #{"n5"})
+                         :nemesis (nemesis/partition-random-node)
+                         :decommissioner true}))
+
+(def crash-subset-inc-test-mix
+  (cql-counter-inc-test "crash bootstrap and decommission"
+                        {:bootstrap (atom #{"n5"})
+                         :nemesis (crash-nemesis)
+                         :decommissioner true}))
+
+;(def bridge-inc-dec-test-mix
+;  (cql-counter-inc-dec-test "bridge bootstrap and decommission"
+;                            {:bootstrap (atom #{"n5"})
+;                             :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
+;                             :decommissioner true}))
+;
+;(def halves-inc-dec-test-mix
+;  (cql-counter-inc-dec-test "halves bootstrap and decommission"
+;                            {:bootstrap (atom #{"n5"})
+;                             :nemesis (nemesis/partition-random-halves)
+;                             :decommissioner true}))
+;
+;(def isolate-node-inc-dec-test-mix
+;  (cql-counter-inc-dec-test "isolate node bootstrap and decommission"
+;                            {:bootstrap (atom #{"n5"})
+;                             :nemesis (nemesis/partition-random-node)
+;                             :decommissioner true}))
+;
+;(def crash-subset-inc-dec-test-mix
+;  (cql-counter-inc-dec-test "crash bootstrap and decommission"
+;                            {:bootstrap (atom #{"n5"})
+;                             :nemesis (crash-nemesis)
+;                             :decommissioner true}))
