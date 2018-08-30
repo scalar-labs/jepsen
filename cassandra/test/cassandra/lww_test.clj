@@ -8,14 +8,15 @@
 
 ; These are commented out - they should fail!
 ; Present as a sanity check on the linearizability checker
-(comment (deftest lwt-test-bridge
-           (run-cas-register-test! bridge-test timestamp))
+(comment
+  (deftest lww-bridge
+           (run-test! bridge-test))
 
-         (deftest lwt-test-isolate-node
-           (run-cas-register-test! isolate-node-test timestamp))
+  (deftest lww-isolate-node
+           (run-test! isolate-node-test))
 
-         (deftest lwt-test-halves
-           (run-cas-register-test! halves-test timestamp))
+  (deftest lww-halves
+           (run-test! halves-test))
 
-         (deftest lwt-test-crash-subset
-           (run-cas-register-test! crash-subset-test timestamp)))
+  (deftest lww-crash-subset
+           (run-test! crash-subset-test)))

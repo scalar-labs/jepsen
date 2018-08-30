@@ -1,9 +1,11 @@
-# Cassandra
+# Cassandra tests with Jepsen
 
 This is based on [riptano's jepsen](https://github.com/riptano/jepsen/tree/cassandra/cassandra).
 
 ## Current status
-- Support only `collections.map-test`, `collections.set-test`, `batch-test`, `counter-test`(only add) and `lwt-test`
+- Support `collections.map-test`, `collections.set-test`, `batch-test`, `counter-test`(only add) and `lwt-test`
+  - All tests of `lww-test` are commented out because they should fail
+  - WIP: `mv-test`
 
 ## Starting the Docker Container
 
@@ -12,72 +14,20 @@ cd ${JEPSEN}/docker
 ./up.sh
 ```
 
-- If you use Docker for MacOS, you can increase memory limit
-```
-VBoxManage modifyvm default --memory 4096
-```
-
 ## Environment Setup (within Docker container)
 
-- Change Cassandra wrapper `Cassaforte` for Cassandra 3.x
-  - Modify converter as below in src/clojure/clojurewerkz/cassaforte/conversion.clj
-  - Modify option methods in src/clojure/clojurewerkz/cassaforte/query.clj
+### Install Cassaforte
+- Get and install `Cassaforte` which has been modified for the new Cassandra driver
+  - Modified converter as below in src/clojure/clojurewerkz/cassaforte/conversion.clj
+  - Modified option methods in src/clojure/clojurewerkz/cassaforte/query.clj
 
 ```
-cd ~
-git clone https://github.com/clojurewerkz/cassaforte.git
+# In jepsen-control
+cd ${WORKSPACE}
+git clone -b driver-3.0-for-jepsen https://github.com/scalar-labs/cassaforte
+cd cassaforte
+lein install
 ```
-
-```
-diff --git a/src/clojure/clojurewerkz/cassaforte/conversion.clj b/src/clojure/clojurewerkz/cassaforte/conversion.clj
-index 46184b9..7427c33 100644
---- a/src/clojure/clojurewerkz/cassaforte/conversion.clj
-+++ b/src/clojure/clojurewerkz/cassaforte/conversion.clj
-@@ -32,18 +32,15 @@
-                                               (if (< (inc i) (.size cd))
-                                                 (recur (assoc row-data (keyword name) value) (inc i))
-                                                 (assoc row-data (keyword name) value)))))))
--    (instance? Map java-val)       (let [t (transient {})]
--                                     (doseq [[k v] java-val]
--                                       (assoc! t k v))
--                                     (persistent! t))
--    (instance? Set java-val)       (let [t (transient #{})]
--                                     (doseq [v java-val]
--                                       (conj! t v))
--                                     (persistent! t))
--    (instance? List java-val)      (let [t (transient [])]
--                                     (doseq [v java-val]
--                                       (conj! t v))
--                                     (persistent! t))
-+    (instance? Map java-val)       (persistent!
-+                                     (reduce (fn [t [k v]] (assoc! t k v))
-+                                             (transient {}) java-val))
-+    (instance? Set java-val)       (persistent!
-+                                     (reduce (fn [t v] (conj! t v))
-+                                             (transient #{}) java-val))
-+    (instance? List java-val)      (persistent!
-+                                     (reduce (fn [t [k v]] (conj! t v))
-+                                             (transient []) java-val))
-     (instance? Host java-val)      (let [^Host host java-val]
-                                      {:datacenter (.getDatacenter host)
-                                       :address    (.getHostAddress (.getAddress host))
-diff --git a/src/clojure/clojurewerkz/cassaforte/query.clj b/src/clojure/clojurewerkz/cassaforte/query.clj
-index 0899355..d6fbcee 100644
---- a/src/clojure/clojurewerkz/cassaforte/query.clj
-+++ b/src/clojure/clojurewerkz/cassaforte/query.clj
-@@ -481,8 +481,7 @@
-                          (fn [opts [option-name option-vals]]
-                            ((resolve-alter-option option-name) opts option-vals))
-                          (.withOptions query-builder)
--                         options)
--                        query-builder)
-+                         options))
- 
- 
-        :add-column    (fn add-column-statement [query-builder [column-name column-type]]
-```
-
-- Then, `lein install` Cassaforte
 
 ## Running Tests
 
