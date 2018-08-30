@@ -34,3 +34,10 @@ lein install
 > A whole category of tests can be run using the selectors defined in `project.clj`. For example, one could run `lein test :mv` to test materialized views. These tests are additive, so one could run `lein test :mv :lwt` to test materialized views and lightweight transactions.
 > 
 > To run an individual test, one can use a command like `lein test :only cassandra.counter-test/cql-counter-inc-halves`.
+
+- If you add `-mix` as suffix, you can try a test with mixture of failure injection, bootstrapping and decommission
+
+```
+cd ${JEPSEN}/cassandra
+lein test :only cassandra.lwt-test/lwt-isolate-node-mix
+```
