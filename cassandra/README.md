@@ -38,6 +38,7 @@ lein install
 - If you add `-mix` as suffix, you can try a test with mixture of failure injection, bootstrapping and decommission
 
 ```
+# In jepsen-control
 cd ${JEPSEN}/cassandra
 lein test :only cassandra.lwt-test/lwt-isolate-node-mix
 ```
