@@ -13,7 +13,6 @@
                    :bootstrap :bootstrap
                    :map :map
                    :set :set
-                   :mv :mv
                    :batch :batch
                    :lwt :lwt
                    :decommission :decommission

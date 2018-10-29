@@ -5,8 +5,7 @@ This is based on [riptano's jepsen](https://github.com/riptano/jepsen/tree/cassa
 ## Current status
 - Support Apache Cassandra 3.11.x
 - Support `collections.map-test`, `collections.set-test`, `batch-test`, `counter-test`(only add) and `lwt-test`
-  - All tests of `lww-test` are commented out because they should fail
-  - WIP: `mv-test`
+  - Removed `lww-test` and `mv-test`
 
 ## How to test
 ### Start the Docker Container
