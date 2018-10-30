@@ -111,120 +111,16 @@
   []
   (->BatchSetClient nil))
 
-(defn batch-set-test
-  [name opts]
-  (merge (cassandra-test (str "batch set " name)
+(defn batch-test
+  [opts]
+  (merge (cassandra-test (str "batch-set-" (:suffix opts))
                          {:client (batch-set-client)
                           :model (model/set)
                           :generator (gen/phases
                                       (->> [(adds)]
-                                           (conductors/std-gen opts 60))
+                                           (conductors/std-gen opts))
                                       (gen/delay 5
                                                  (read-once)))
                           :checker (checker/compose
                                     {:set (checker/set)})})
-         (conductors/combine-nemesis opts)))
-
-(def bridge-test
-  (batch-set-test "bridge"
-                  {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test
-  (batch-set-test "halves"
-                  {:nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test
-  (batch-set-test "isolate node"
-                  {:nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test
-  (batch-set-test "crash"
-                  {:nemesis (crash-nemesis)}))
-
-(def clock-drift-test
-  (batch-set-test "clock drift"
-                  {:nemesis (nemesis/clock-scrambler 10000)}))
-
-(def flush-compact-test
-  (batch-set-test "flush and compact"
-                  {:nemesis (conductors/flush-and-compacter)}))
-
-(def bridge-test-bootstrap
-  (batch-set-test "bridge bootstrap"
-                  {:bootstrap (atom #{"n4" "n5"})
-                   :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test-bootstrap
-  (batch-set-test "halves bootstrap"
-                  {:bootstrap (atom #{"n4" "n5"})
-                   :nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test-bootstrap
-  (batch-set-test "isolate node bootstrap"
-                  {:bootstrap (atom #{"n4" "n5"})
-                   :nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test-bootstrap
-  (batch-set-test "crash bootstrap"
-                  {:bootstrap (atom #{"n4" "n5"})
-                   :nemesis (crash-nemesis)}))
-
-(def clock-drift-test-bootstrap
-  (batch-set-test "clock drift bootstrap"
-                  {:bootstrap (atom #{"n4" "n5"})
-                   :nemesis (nemesis/clock-scrambler 10000)}))
-
-(def bridge-test-decommission
-  (batch-set-test "bridge decommission"
-                  {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                   :decommissioner true}))
-
-(def halves-test-decommission
-  (batch-set-test "halves decommission"
-                  {:nemesis (nemesis/partition-random-halves)
-                   :decommissioner true}))
-
-(def isolate-node-test-decommission
-  (batch-set-test "isolate node decommission"
-                  {:nemesis (nemesis/partition-random-node)
-                   :decommissioner true}))
-
-(def crash-subset-test-decommission
-  (batch-set-test "crash decommission"
-                  {:nemesis (crash-nemesis)
-                   :decommissioner true}))
-
-(def clock-drift-test-decommission
-  (batch-set-test "clock drift decommission"
-                  {:nemesis (nemesis/clock-scrambler 10000)
-                   :decommissioner true}))
-
-(def bridge-test-mix
-  (batch-set-test "bridge bootstrap and decommission"
-                  {:bootstrap (atom #{"n5"})
-                   :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                   :decommissioner true}))
-
-(def halves-test-mix
-  (batch-set-test "halves bootstrap and decommission"
-                  {:bootstrap (atom #{"n5"})
-                   :nemesis (nemesis/partition-random-halves)
-                   :decommissioner true}))
-
-(def isolate-node-test-mix
-  (batch-set-test "isolate node bootstrap and decommission"
-                  {:bootstrap (atom #{"n5"})
-                   :nemesis (nemesis/partition-random-node)
-                   :decommissioner true}))
-
-(def crash-subset-test-mix
-  (batch-set-test "crash bootstrap and decommission"
-                  {:bootstrap (atom #{"n5"})
-                   :nemesis (crash-nemesis)
-                   :decommissioner true}))
-
-(def clock-drift-test-mix
-  (batch-set-test "clock drift bootstrap and decommission"
-                  {:bootstrap (atom #{"n5"})
-                   :nemesis (nemesis/clock-scrambler 10000)
-                   :decommissioner true}))
+         opts))

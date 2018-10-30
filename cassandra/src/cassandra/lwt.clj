@@ -58,6 +58,7 @@
         (cql/alter-table conn "lwt"
                           (with {:compaction-options (compaction-strategy)}))
         (->CasRegisterClient conn))))
+
   (invoke! [this test op]
     (case (:f op)
       :cas (try (let [[v v'] (:value op)
@@ -124,118 +125,14 @@
   []
   (->CasRegisterClient nil))
 
-(defn cas-register-test
-  [name opts]
-  (merge (cassandra-test (str "lwt register " name)
+(defn lwt-test
+  [opts]
+  (merge (cassandra-test (str "lwt-" (:suffix opts))
                          {:client (cas-register-client)
                           :model (model/cas-register)
                           :generator (gen/phases
                                       (->> [r w cas cas cas]
-                                           (conductors/std-gen opts 60)))
+                                           (conductors/std-gen opts)))
                           :checker (checker/compose
                                     {:linear (checker/linearizable)})})
-         (conductors/combine-nemesis opts)))
-
-(def bridge-test
-  (cas-register-test "bridge"
-                     {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test
-  (cas-register-test "halves"
-                     {:nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test
-  (cas-register-test "isolate node"
-                     {:nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test
-  (cas-register-test "crash"
-                     {:nemesis (crash-nemesis)}))
-
-(def flush-compact-test
-  (cas-register-test "flush and compact"
-                     {:nemesis (conductors/flush-and-compacter)}))
-
-(def clock-drift-test
-  (cas-register-test "clock drift"
-                     {:nemesis (nemesis/clock-scrambler 10000)}))
-
-(def bridge-test-bootstrap
-  (cas-register-test "bridge bootstrap"
-                     {:bootstrap (atom #{"n4" "n5"})
-                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test-bootstrap
-  (cas-register-test "halves bootstrap"
-                     {:bootstrap (atom #{"n4" "n5"})
-                      :nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test-bootstrap
-  (cas-register-test "isolate node bootstrap"
-                     {:bootstrap (atom #{"n4" "n5"})
-                      :nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test-bootstrap
-  (cas-register-test "crash bootstrap"
-                     {:bootstrap (atom #{"n4" "n5"})
-                      :nemesis (crash-nemesis)}))
-
-(def clock-drift-test-bootstrap
-  (cas-register-test "clock drift bootstrap"
-                     {:bootstrap (atom #{"n4" "n5"})
-                      :nemesis (nemesis/clock-scrambler 10000)}))
-
-(def bridge-test-decommission
-  (cas-register-test "bridge decommission"
-                     {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                      :decommissioner true}))
-
-(def halves-test-decommission
-  (cas-register-test "halves decommission"
-                     {:nemesis (nemesis/partition-random-halves)
-                      :decommissioner true}))
-
-(def isolate-node-test-decommission
-  (cas-register-test "isolate node decommission"
-                     {:nemesis (nemesis/partition-random-node)
-                      :decommissioner true}))
-
-(def crash-subset-test-decommission
-  (cas-register-test "crash decommission"
-                     {:nemesis (crash-nemesis)
-                      :decommissioner true}))
-
-(def clock-drift-test-decommission
-  (cas-register-test "clock drift decommission"
-                     {:nemesis (nemesis/clock-scrambler 10000)
-                      :decommissioner true}))
-
-(def bridge-test-mix
-  (cas-register-test "bridge bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                      :decommissioner true}))
-
-(def halves-test-mix
-  (cas-register-test "halves bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partition-random-halves)
-                      :decommissioner true}))
-
-(def isolate-node-test-mix
-  (cas-register-test "isolate node  bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partition-random-node)
-                      :decommissioner true}))
-
-(def crash-subset-test-mix
-  (cas-register-test "crash bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (crash-nemesis)
-                      :decommissioner true}))
-
-(def clock-drift-test-mix
-  (cas-register-test "clock drift bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/clock-scrambler 10000)
-                      :decommissioner true}))
+         opts))

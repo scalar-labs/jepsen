@@ -9,13 +9,5 @@
                  [clojurewerkz/cassaforte "3.0.0-alpha2-SNAPSHOT"]]
   :profiles {:dev {:plugins [[test2junit "1.4.2"]]}
              :trunk {:dependencies [[clojurewerkz/cassaforte "3.0.0-alpha2-SNAPSHOT"]]}}
-  :test-selectors {:steady :steady
-                   :bootstrap :bootstrap
-                   :map :map
-                   :set :set
-                   :batch :batch
-                   :lwt :lwt
-                   :decommission :decommission
-                   :counter :counter
-                   :clock :clock
-                   :all (constantly true)})
+  :main cassandra.runner
+  :aot [cassandra.runner])

@@ -5,9 +5,7 @@
             [jepsen [client :as client]
              [control :as c]
              [generator :as gen]
-             [nemesis :as nemesis]
-             [net :as net]
-             [util :as util :refer [meh]]]))
+             [nemesis :as nemesis]]))
 
 (defn bootstrapper
   []
@@ -72,65 +70,32 @@
         :stop (assoc op :value "stop is a no-op with this nemesis")))
     (teardown! [this test] this)))
 
-; TODO: Modify to support mv_test
-;(defn flexible-partitioner
-;  "Responds to a :start operation by cutting network links as defined by
-;  (grudge nodes), and responds to :stop by healing the network. Uses
-;  :grudge entry in op to determine grudge function used."
-;  [grudge-map]
-;  (reify client/Client
-;    (setup! [this test _]
-;      (net/heal! (:net test) test)
-;      this)
-;
-;    (invoke! [this test op]
-;      (case (:f op)
-;        :start (let [grudge ((-> op :grudge grudge-map) (:nodes test))]
-;                 (nemesis/partition! test grudge)
-;                 (assoc op :value (str "Cut off " (pr-str grudge))))
-;        :stop  (do (net/heal! (:net test) test)
-;                   (assoc op :value "fully connected"))))
-;
-;    (teardown! [this test]
-;      (net/heal! (:net test) test))))
-
 (defn mix-failure
   "Make a seq with start and stop for nemesis failure, and mix bootstrapping and decommissioning"
   [opts]
-  (let [decop (when (:decommissioner opts)
+  (let [decop (when (:decommission (:join opts))
                 {:type :info :f :decommission})
-        bootop (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
+        bootop (when (:bootstrap (:join opts))
                  {:type :info :f :bootstrap})
         ops [decop bootop]
-        base [(gen/sleep (+ (rand-int 20) 1))
+        base [(gen/sleep (+ (rand-int 30) 60))
               {:type :info :f :start}
-              (gen/sleep (+ (rand-int 20) 1))
+              (gen/sleep (+ (rand-int 30) 60))
               {:type :info :f :stop}]]
     (if-let [op (rand-nth ops)]
-      (conj base (gen/sleep (+ (rand-int 20) 1)) op)
+      (conj base (gen/sleep (+ (rand-int 30) 60)) op)
       base)))
 
 (defn mix-failure-seq
   [opts]
   (gen/seq (flatten (repeatedly #(mix-failure opts)))))
 
-(defn combine-nemesis
-  "Combine nemesis options with bootstrapper and decommissioner"
-  [opts]
-  (assoc opts :nemesis
-         (nemesis/compose
-           (conj {#{:start :stop} (:nemesis opts)}
-                 (when (:decommissioner opts)
-                   {#{:decommission} (decommissioner)})
-                 (when (and (:bootstrap opts) (not-empty @(:bootstrap opts)))
-                   {#{:bootstrap} (bootstrapper)})))))
 
 (defn std-gen
-  ([opts gen] (std-gen opts 300 gen))
-  ([opts duration gen]
-   (->> gen
-        gen/mix
-        (gen/stagger 1/5)
-        (gen/nemesis
-          (mix-failure-seq opts))
-        (gen/time-limit duration))))
+  [opts gen]
+  (->> gen
+       gen/mix
+       (gen/stagger 1/5)
+       (gen/nemesis
+         (mix-failure-seq opts))
+       (gen/time-limit (:time-limit opts))))

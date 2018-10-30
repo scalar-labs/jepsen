@@ -97,100 +97,15 @@
   ([] (->CQLMapClient nil :one))
   ([writec] (->CQLMapClient nil writec)))
 
-(defn cql-map-test
-  [name opts]
-  (merge (cassandra-test (str "cql map " name)
+(defn map-test
+  [opts]
+  (merge (cassandra-test (str "map-" (:name opts))
                          {:client (cql-map-client)
                           :model (model/set)
                           :generator (gen/phases
                                       (->> [(adds)]
-                                           (conductors/std-gen opts 60))
+                                           (conductors/std-gen opts))
                                       (read-once))
                           :checker (checker/compose
                                     {:set (checker/set)})})
-         (conductors/combine-nemesis opts)))
-
-(def bridge-test
-  (cql-map-test "bridge"
-                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test
-  (cql-map-test "halves"
-                {:nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test
-  (cql-map-test "isolate node"
-                {:nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test
-  (cql-map-test "crash"
-                {:nemesis (crash-nemesis)}))
-
-(def flush-compact-test
-  (cql-map-test "flush and compact"
-                {:nemesis (conductors/flush-and-compacter)}))
-
-(def bridge-test-bootstrap
-  (cql-map-test "bridge bootstrap"
-                {:bootstrap (atom #{"n4" "n5"})
-                 :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))}))
-
-(def halves-test-bootstrap
-  (cql-map-test "halves bootstrap"
-                {:bootstrap (atom #{"n4" "n5"})
-                 :nemesis (nemesis/partition-random-halves)}))
-
-(def isolate-node-test-bootstrap
-  (cql-map-test "isolate node bootstrap"
-                {:bootstrap (atom #{"n4" "n5"})
-                 :nemesis (nemesis/partition-random-node)}))
-
-(def crash-subset-test-bootstrap
-  (cql-map-test "crash bootstrap"
-                {:bootstrap (atom #{"n4" "n5"})
-                 :nemesis (crash-nemesis)}))
-
-(def bridge-test-decommission
-  (cql-map-test "bridge decommission"
-                {:nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                 :decommissioner true}))
-
-(def halves-test-decommission
-  (cql-map-test "halves decommission"
-                {:nemesis (nemesis/partition-random-halves)
-                 :decommissioner true}))
-
-(def isolate-node-test-decommission
-  (cql-map-test "isolate node decommission"
-                {:nemesis (nemesis/partition-random-node)
-                 :decommissioner true}))
-
-(def crash-subset-test-decommission
-  (cql-map-test "crash decommission"
-                {:client (cql-map-client :quorum)
-                 :nemesis (crash-nemesis)
-                 :decommissioner true}))
-
-(def bridge-test-mix
-  (cql-map-test "bridge bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partitioner (comp nemesis/bridge shuffle))
-                      :decommissioner true}))
-
-(def halves-test-mix
-  (cql-map-test "halves bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partition-random-halves)
-                      :decommissioner true}))
-
-(def isolate-node-test-mix
-  (cql-map-test "isolate node bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (nemesis/partition-random-node)
-                      :decommissioner true}))
-
-(def crash-subset-test-mix
-  (cql-map-test "crash bootstrap and decommission"
-                     {:bootstrap (atom #{"n5"})
-                      :nemesis (crash-nemesis)
-                      :decommissioner true}))
+         opts))
