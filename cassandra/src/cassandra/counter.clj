@@ -46,7 +46,7 @@
                              (if-not-exists)
                              (with {:replication
                                     {"class" "SimpleStrategy"
-                                     "replication_factor" 3}}))
+                                     "replication_factor" (:rf test)}}))
         (cql/use-keyspace conn "jepsen_keyspace")
         (cql/create-table conn "counters"
                           (if-not-exists)

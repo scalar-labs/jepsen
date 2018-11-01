@@ -38,12 +38,20 @@
 
 (def opt-spec
   [(jc/repeated-opt nil "--test NAME" "Test(s) to run" [] tests)
+
    (jc/repeated-opt nil "--nemesis NAME" "Which nemeses to use"
                     [`(can/none)]
                     nemeses)
+
    (jc/repeated-opt nil "--join NAME" "Which node joinings to use"
                     [{:name "" :bootstrap false :decommission false}]
                     joinings)
+
+   [nil "--rf REPLICATION_FACTOR" "Replication factor"
+    :default 3
+    :parse-fn #(Long/parseLong %)
+    :validate [pos? "Must be positive"]]
+
    [nil "--cassandra VERSION" "C* version to use"
     :default "3.11.3"]])
 
