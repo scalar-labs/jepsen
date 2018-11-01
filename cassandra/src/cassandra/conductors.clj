@@ -9,8 +9,8 @@
 
 (defn bootstrapper
   []
-  (reify client/Client
-    (setup! [this test node] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
     (invoke! [this test op]
       (let [bootstrap (:bootstrap test)
             decommission (:decommission test)]
@@ -29,13 +29,13 @@
 
 (defn decommissioner
   []
-  (reify client/Client
-    (setup! [this test node] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
     (invoke! [this test op]
       (let [decommission (:decommission test)
             bootstrap (:bootstrap test)]
         (if-let [node (some-> test cassandra/live-nodes (set/difference @decommission)
-                         shuffle (get 3))] ; keep at least RF nodes
+                         shuffle (get (:rf test)))] ; keep at least RF nodes
           (do (info node "decommissioning")
               (info @decommission "already decommissioned")
               (swap! decommission conj node)
@@ -47,8 +47,8 @@
 
 (defn replayer
   []
-  (reify client/Client
-    (setup! [this test node] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
     (invoke! [this test op]
       (let [live-nodes (cassandra/live-nodes test)]
         (doseq [node live-nodes]
@@ -59,8 +59,8 @@
 (defn flush-and-compacter
   "Flushes to sstables and forces a major compaction on all nodes"
   []
-  (reify client/Client
-    (setup! [this test node] this)
+  (reify nemesis/Nemesis
+    (setup! [this test] this)
     (invoke! [this test op]
       (case (:f op)
         :start (do (doseq [node (:nodes test)]
