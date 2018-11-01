@@ -108,7 +108,7 @@
 
 (defn map-test
   [opts]
-  (merge (cassandra-test (str "map-" (:name opts))
+  (merge (cassandra-test (str "map-" (:suffix opts))
                          {:client (cql-map-client)
                           :model (model/set)
                           :generator (gen/phases
