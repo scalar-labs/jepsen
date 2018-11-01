@@ -38,11 +38,15 @@
                                ;it isn't really a valid keyword from reader's
                                ;perspective
 
-(defrecord CasRegisterClient [conn]
+(defrecord CasRegisterClient [tbl-created? conn]
   client/Client
-  (setup! [_ test node]
-    (locking setup-lock
-      (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [_ test _]
+    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+      (CasRegisterClient. tbl-created? conn)))
+
+  (setup! [this test]
+    (locking tbl-created?
+      (when (compare-and-set! tbl-created? false true)
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
@@ -56,10 +60,11 @@
                                                :primary-key [:id]}))
         ; @TODO change compaction storategy
         (cql/alter-table conn "lwt"
-                          (with {:compaction-options (compaction-strategy)}))
-        (->CasRegisterClient conn))))
+                          (with {:compaction-options (compaction-strategy)})))
+      this))
 
   (invoke! [this test op]
+    (cql/use-keyspace conn "jepsen_keyspace")
     (case (:f op)
       :cas (try (let [[v v'] (:value op)
                       result (cql/update conn "lwt" {:value v'}
@@ -116,19 +121,17 @@
                    (info "All the servers are down - waiting 2s")
                    (Thread/sleep 2000)
                    (assoc op :type :fail :error (.getMessage e))))))
-  (teardown! [_ _]
-    (info "Tearing down client with conn" conn)
-    (cassandra/disconnect! conn)))
 
-(defn cas-register-client
-  "A CAS register implemented using LWT"
-  []
-  (->CasRegisterClient nil))
+  (close! [_ _]
+    (info "Closing client with conn" conn)
+    (cassandra/disconnect! conn))
+
+  (teardown! [_ _]))
 
 (defn lwt-test
   [opts]
   (merge (cassandra-test (str "lwt-" (:suffix opts))
-                         {:client (cas-register-client)
+                         {:client (CasRegisterClient. (atom false) nil)
                           :model (model/cas-register)
                           :generator (gen/phases
                                       (->> [r w cas cas cas]

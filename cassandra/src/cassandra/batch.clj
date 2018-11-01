@@ -35,11 +35,15 @@
                                                 ReadTimeoutException
                                                 NoHostAvailableException)))
 
-(defrecord BatchSetClient [conn]
+(defrecord BatchSetClient [tbl-created? conn]
   client/Client
-  (setup! [_ test node]
-    (locking setup-lock
-      (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [_ test _]
+    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+      (BatchSetClient. tbl-created? conn)))
+
+  (setup! [this test]
+    (locking tbl-created?
+      (when (compare-and-set! tbl-created? false true)
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
@@ -54,9 +58,11 @@
                                                :primary-key [:pid :cid]}))
         ; @TODO change compaction storategy
         (cql/alter-table conn "bat"
-                          (with {:compaction-options (compaction-strategy)}))
-        (->BatchSetClient conn))))
+                          (with {:compaction-options (compaction-strategy)})))
+      this))
+
   (invoke! [this test op]
+    (cql/use-keyspace conn "jepsen_keyspace")
     (case (:f op)
       :add (try (let [value (:value op)]
                   (cassandra/execute
@@ -102,19 +108,17 @@
                    (info "All nodes are down - sleeping 2s")
                    (Thread/sleep 2000)
                    (assoc op :type :fail :value (.getMessage e))))))
-  (teardown! [_ _]
-    (info "Tearing down client with conn" conn)
-    (cassandra/disconnect! conn)))
 
-(defn batch-set-client
-  "A set implemented using batched inserts"
-  []
-  (->BatchSetClient nil))
+  (close! [_ _]
+    (info "Closing client with conn" conn)
+    (cassandra/disconnect! conn))
+
+  (teardown! [_ _]))
 
 (defn batch-test
   [opts]
   (merge (cassandra-test (str "batch-set-" (:suffix opts))
-                         {:client (batch-set-client)
+                         {:client (BatchSetClient. (atom false) nil)
                           :model (model/set)
                           :generator (gen/phases
                                       (->> [(adds)]

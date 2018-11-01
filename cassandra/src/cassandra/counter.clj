@@ -33,11 +33,15 @@
                                                 NoHostAvailableException)
            (com.datastax.driver.core.policies FallthroughRetryPolicy)))
 
-(defrecord CQLCounterClient [conn writec]
+(defrecord CQLCounterClient [tbl-created? conn writec]
   client/Client
-  (setup! [_ test node]
-    (locking setup-lock
-      (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [_ test _]
+    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+      (CQLCounterClient. tbl-created? conn writec)))
+
+  (setup! [this test]
+    (locking tbl-created?
+      (when (compare-and-set! tbl-created? false true)
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
@@ -53,9 +57,11 @@
         (cql/alter-table conn "counters"
                           (with {:compaction-options (compaction-strategy)}))
         (cql/update conn "counters" {:count (increment-by 0)}
-                    (where [[= :id 0]]))
-        (->CQLCounterClient conn writec))))
+                    (where [[= :id 0]])))
+      this))
+
   (invoke! [this test op]
+    (cql/use-keyspace conn "jepsen_keyspace")
     (case (:f op)
       :add (try (let [value (:value op)
                       added (if (pos? value) (str "+" value) (str value))]
@@ -91,14 +97,17 @@
                    (info "All the servers are down - waiting 2s")
                    (Thread/sleep 2000)
                    (assoc op :type :fail :error (.getMessage e))))))
-  (teardown! [_ _]
-    (info "Tearing down client with conn" conn)
-    (cassandra/disconnect! conn)))
+
+  (close! [_ _]
+    (info "Closing client with conn" conn)
+    (cassandra/disconnect! conn))
+
+  (teardown! [_ _]))
 
 (defn cql-counter-client
   "A counter implemented using CQL counters"
-  ([] (->CQLCounterClient nil :one))
-  ([writec] (->CQLCounterClient nil writec)))
+  ([] (CQLCounterClient. (atom false) nil :one))
+  ([writec] (CQLCounterClient. (atom false) nil writec)))
 
 (defn cnt-inc-test
   [opts]

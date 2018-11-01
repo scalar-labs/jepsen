@@ -33,11 +33,15 @@
                                                 ReadTimeoutException
                                                 NoHostAvailableException)))
 
-(defrecord CQLSetClient [conn writec]
+(defrecord CQLSetClient [tbl-created? conn writec]
   client/Client
-  (setup! [_ test node]
-    (locking setup-lock
-      (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [_ test _]
+    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+      (CQLSetClient. tbl-created? conn writec)))
+
+  (setup! [this test]
+    (locking tbl-created?
+      (when (compare-and-set! tbl-created? false true)
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
@@ -55,9 +59,11 @@
         (cql/insert conn "sets"
                     {:id 0
                      :elements #{}}
-                    (if-not-exists))
-        (->CQLSetClient conn writec))))
+                    (if-not-exists)))
+      this))
+
   (invoke! [this test op]
+    (cql/use-keyspace conn "jepsen_keyspace")
     (case (:f op)
       :add (try (cassandra/execute
                   conn
@@ -93,14 +99,17 @@
                    (info "All nodes are down - sleeping 2s")
                    (Thread/sleep 2000)
                    (assoc op :type :fail :value (.getMessage e))))))
-  (teardown! [_ _]
-    (info "Tearing down client with conn" conn)
-    (cassandra/disconnect! conn)))
+
+  (close! [_ _]
+    (info "Closing client with conn" conn)
+    (cassandra/disconnect! conn))
+
+  (teardown! [_ _]))
 
 (defn cql-set-client
   "A set implemented using CQL sets"
-  ([] (->CQLSetClient nil ConsistencyLevel/ONE))
-  ([writec] (->CQLSetClient nil writec)))
+  ([] (CQLSetClient. (atom false) nil :one))
+  ([writec] (CQLSetClient. (atom false) nil writec)))
 
 (defn set-test
   [opts]

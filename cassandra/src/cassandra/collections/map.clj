@@ -32,11 +32,15 @@
                                                 ReadTimeoutException
                                                 NoHostAvailableException)))
 
-(defrecord CQLMapClient [conn writec]
+(defrecord CQLMapClient [tbl-created? conn writec]
   client/Client
-  (setup! [_ test node]
-    (locking setup-lock
-      (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [_ test _]
+    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+      (CQLMapClient. tbl-created? conn writec)))
+
+  (setup! [this test]
+    (locking tbl-created?
+      (when (compare-and-set! tbl-created? false true)
         (cql/create-keyspace conn "jepsen_keyspace"
                              (if-not-exists)
                              (with {:replication
@@ -53,9 +57,11 @@
                           (with {:compaction-options (compaction-strategy)}))
         (cql/insert conn "maps"
                     {:id 0
-                     :elements {}})
-        (->CQLMapClient conn writec))))
+                     :elements {}}))
+      this))
+
   (invoke! [this test op]
+    (cql/use-keyspace conn "jepsen_keyspace")
     (case (:f op)
       :add (try (cassandra/execute
                   conn
@@ -88,14 +94,17 @@
                    (assoc op :type :fail :value (.getMessage e)))
                  (catch ReadTimeoutException e
                    (assoc op :type :fail :value :timed-out)))))
-  (teardown! [_ _]
-    (info "Tearing down client with conn" conn)
-    (cassandra/disconnect! conn)))
+
+  (close! [_ _]
+    (info "Closing client with conn" conn)
+    (cassandra/disconnect! conn))
+
+  (teardown! [_ _]))
 
 (defn cql-map-client
   "A set implemented using CQL maps"
-  ([] (->CQLMapClient nil :one))
-  ([writec] (->CQLMapClient nil writec)))
+  ([] (CQLMapClient. (atom false) nil :one))
+  ([writec] (CQLMapClient. (atom false) nil writec)))
 
 (defn map-test
   [opts]
