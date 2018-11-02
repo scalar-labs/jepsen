@@ -58,8 +58,7 @@
                                                :primary-key [:pid :cid]}))
         ; @TODO change compaction storategy
         (cql/alter-table conn "bat"
-                          (with {:compaction-options (compaction-strategy)})))
-      this))
+                          (with {:compaction-options (compaction-strategy)})))))
 
   (invoke! [this test op]
     (cql/use-keyspace conn "jepsen_keyspace")

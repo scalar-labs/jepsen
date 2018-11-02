@@ -59,8 +59,7 @@
         (cql/insert conn "sets"
                     {:id 0
                      :elements #{}}
-                    (if-not-exists)))
-      this))
+                    (if-not-exists)))))
 
   (invoke! [this test op]
     (cql/use-keyspace conn "jepsen_keyspace")

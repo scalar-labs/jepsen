@@ -57,8 +57,7 @@
         (cql/alter-table conn "counters"
                           (with {:compaction-options (compaction-strategy)}))
         (cql/update conn "counters" {:count (increment-by 0)}
-                    (where [[= :id 0]])))
-      this))
+                    (where [[= :id 0]])))))
 
   (invoke! [this test op]
     (cql/use-keyspace conn "jepsen_keyspace")

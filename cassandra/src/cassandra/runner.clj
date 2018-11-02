@@ -24,7 +24,7 @@
 (def nemeses
   {"none"      `(can/none)
    "flush"     `(can/flush-and-compacter)
-   "clock"     `(can/clock-drift)
+   ;"clock"     `(can/clock-drift)
    "bridge"    `(can/bridge)
    "halves"    `(can/halves)
    "isolation" `(can/isolation)

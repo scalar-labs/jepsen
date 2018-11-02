@@ -17,8 +17,8 @@ cd ${JEPSEN}/docker
 
 ### Install Cassaforte
 - Get and install `Cassaforte` which has been modified for the new Cassandra driver
-  - Modified converter as below in src/clojure/clojurewerkz/cassaforte/conversion.clj
-  - Modified option methods in src/clojure/clojurewerkz/cassaforte/query.clj
+  - Modified converter in `src/clojure/clojurewerkz/cassaforte/conversion.clj`
+  - Modified option methods in `src/clojure/clojurewerkz/cassaforte/query.clj`
 
 ```
 # In jepsen-control
@@ -30,14 +30,6 @@ lein install
 
 ### Run tests
 
-> A whole category of tests can be run using the selectors defined in `project.clj`. For example, one could run `lein test :mv` to test materialized views. These tests are additive, so one could run `lein test :mv :lwt` to test materialized views and lightweight transactions.
-> 
-> To run an individual test, one can use a command like `lein test :only cassandra.counter-test/cql-counter-inc-halves`.
+`lein run test --test lwt --nemesis bridge --join bootstrap`
 
-- If you add `-mix` as suffix, you can try a test with mixture of failure injection, bootstrapping and decommission
-
-```
-# In jepsen-control
-cd ${JEPSEN}/cassandra
-lein test :only cassandra.lwt-test/lwt-isolate-node-mix
-```
+- See `lein run test --help` for full options

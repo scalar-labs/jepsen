@@ -57,8 +57,7 @@
                           (with {:compaction-options (compaction-strategy)}))
         (cql/insert conn "maps"
                     {:id 0
-                     :elements {}}))
-      this))
+                     :elements {}}))))
 
   (invoke! [this test op]
     (cql/use-keyspace conn "jepsen_keyspace")
