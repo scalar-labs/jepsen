@@ -91,7 +91,7 @@
               {:type :info :f :start}
               (gen/sleep (+ (rand-int 30) 60))
               {:type :info :f :stop}]]
-    (if-let [op (rand-nth ops)]
+    (if-let [op (-> ops not-empty rand-nth)]
       (conj base (gen/sleep (+ (rand-int 30) 60)) op)
       base)))
 
