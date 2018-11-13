@@ -4,6 +4,7 @@
              [core    :as jepsen]
              [cli     :as jc]
              [nemesis :as jn]]
+            [jepsen.nemesis.time :as nt]
             [cassandra.collections.map :as map]
             [cassandra.collections.set :as set]
             [cassandra [core       :as cassandra]
@@ -24,7 +25,6 @@
 (def nemeses
   {"none"      `(can/none)
    "flush"     `(can/flush-and-compacter)
-   ;"clock"     `(can/clock-drift)
    "bridge"    `(can/bridge)
    "halves"    `(can/halves)
    "isolation" `(can/isolation)
@@ -35,6 +35,12 @@
    "bootstrap"    {:name "-bootstrap"       :bootstrap true  :decommission false}
    "decommission" {:name "-decommissioning" :bootstrap false :decommission true}
    "rejoin"       {:name "-rejoining"       :bootstrap true  :decommission true}})
+
+(def clocks
+  {"none"   {:name ""              :bump false :strobe false}
+   "bump"   {:name "-clock-bump"   :bump true  :strobe false}
+   "strobe" {:name "-clock-strobe" :bump false :strobe true}
+   "drift"  {:name "-clock-drift"  :bump true  :strobe true}})
 
 (def opt-spec
   [(jc/repeated-opt nil "--test NAME" "Test(s) to run" [] tests)
@@ -47,6 +53,10 @@
                     [{:name "" :bootstrap false :decommission false}]
                     joinings)
 
+   (jc/repeated-opt nil "--clock NAME" "Which clock-drift to use"
+                    [{:name "" :bump false :strobe false}]
+                    clocks)
+
    [nil "--rf REPLICATION_FACTOR" "Replication factor"
     :default 3
     :parse-fn #(Long/parseLong %)
@@ -57,10 +67,11 @@
 
 (defn combine-nemesis
   "Combine nemesis options with bootstrapper and decommissioner"
-  [opts nemesis joining]
+  [opts nemesis joining clock]
   (-> opts
-      (assoc :suffix (str (:name (eval nemesis)) (:name joining)))
+      (assoc :suffix (str (:name (eval nemesis)) (:name joining) (:name clock)))
       (assoc :join joining)
+      (assoc :clock clock)
       (assoc :bootstrap
              (if (:bootstrap joining)
                (atom #{(last (:nodes opts))})
@@ -72,7 +83,9 @@
                      (when (:decommission joining)
                        {#{:decommission} (conductors/decommissioner)})
                      (when (:bootstrap joining)
-                       {#{:bootstrap} (conductors/bootstrapper)}))))))
+                       {#{:bootstrap} (conductors/bootstrapper)})
+                     (when (or (:bump clock) (:strobe clock))
+                       {#{:reset :bump :strobe} (nt/clock-nemesis)}))))))
 
 (defn test-cmd
    []
@@ -83,9 +96,10 @@
                    (doseq [i        (range (:test-count options))
                            test-fn  (:test options)
                            nemesis  (:nemesis options)
-                           joining  (:join options)]
+                           joining  (:join options)
+                           clock    (:clock options)]
                      (let [test (-> options
-                                    (combine-nemesis nemesis joining)
+                                    (combine-nemesis nemesis joining clock)
                                     (assoc :db (cassandra/db (:cassandra options)))
                                     (dissoc :test)
                                     test-fn

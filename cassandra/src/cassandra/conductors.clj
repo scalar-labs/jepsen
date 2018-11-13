@@ -5,7 +5,8 @@
             [jepsen [client :as client]
              [control :as c]
              [generator :as gen]
-             [nemesis :as nemesis]]))
+             [nemesis :as nemesis]]
+            [jepsen.nemesis.time :as nt]))
 
 (defn bootstrapper
   []
@@ -73,11 +74,19 @@
 (defn mix-failure
   "Make a seq with start and stop for nemesis failure, and mix bootstrapping and decommissioning"
   [opts]
-  (let [decop (when (:decommission (:join opts))
-                {:type :info :f :decommission})
+  (let [decop  (when (:decommission (:join opts))
+                 {:type :info :f :decommission})
         bootop (when (:bootstrap (:join opts))
                  {:type :info :f :bootstrap})
-        ops [decop bootop]
+        reset  (when (:bump (:clock opts))
+                 (nt/reset-gen opts nil))
+        bump   (when (:bump (:clock opts))
+                 (nt/bump-gen opts nil))
+        strobe (when (:strobe (:clock opts))
+                 (nt/strobe-gen opts nil))
+
+        ops (remove nil? [decop bootop reset bump strobe])
+
         base [(gen/sleep (+ (rand-int 30) 60))
               {:type :info :f :start}
               (gen/sleep (+ (rand-int 30) 60))
@@ -95,7 +104,6 @@
   [opts gen]
   (->> gen
        gen/mix
-       (gen/stagger 1/5)
        (gen/nemesis
          (mix-failure-seq opts))
        (gen/time-limit (:time-limit opts))))
