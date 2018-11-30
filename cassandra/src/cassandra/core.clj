@@ -17,8 +17,8 @@
              [report    :as report]
              [tests     :as tests]]
             [jepsen.checker.timeline :as timeline]
-            [jepsen.control [net :as net]
-             [util :as net/util]]
+            [jepsen.control [net :as cn]
+             [util :as cu]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [clojurewerkz.cassaforte.metadata :as metadata]
@@ -149,50 +149,16 @@
 
 (def setup-lock (Object.))
 
-(defn cached-install?
-  [src]
-  (try (c/exec :grep :-s :-F :-x (lit src) (lit ".download"))
-       true
-       (catch RuntimeException _ false)))
-
 (defn install!
   "Installs Cassandra on the given node."
-  [node version]
-  (c/su
-   (c/cd
-    "/tmp"
-    (let [tpath (System/getenv "CASSANDRA_TARBALL_PATH")
-          url (or tpath
-                  (System/getenv "CASSANDRA_TARBALL_URL")
-                  (str "http://www.us.apache.org/dist/cassandra/" version
-                       "/apache-cassandra-" version "-bin.tar.gz"))]
-      (info node "installing Cassandra from" url)
-      (if (cached-install? url)
-        (info "Used cached install on node" node)
-        (do (if tpath
-              (c/upload tpath "/tmp/cassandra.tar.gz")
-              (c/exec :wget :-O "cassandra.tar.gz" url (lit ";")))
-            (c/exec :tar :xzvf "cassandra.tar.gz" :-C "~")
-            (c/exec :rm :-r :-f (lit "~/cassandra"))
-            (c/exec :mv (lit "~/apache* ~/cassandra"))
-            (c/exec :echo url :> (lit ".download"))
-            (c/exec
-             :echo
-             "deb http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
-             :>"/etc/apt/sources.list.d/webupd8team-java.list")
-            (c/exec
-             :echo
-             "deb-src http://ppa.launchpad.net/webupd8team/java/ubuntu trusty main"
-             :>> "/etc/apt/sources.list.d/webupd8team-java.list")
-            (try (c/exec :apt-key :adv :--keyserver "hkp://keyserver.ubuntu.com:80"
-                        :--recv-keys "EEA14886")
-                 (debian/update!)
-                 (catch RuntimeException e
-                   (info "Error updating caused by" e)))
-            (c/exec :echo
-                    "debconf shared/accepted-oracle-license-v1-1 select true"
-                    | :debconf-set-selections)
-            (debian/install [:oracle-java8-installer])))))))
+  [node test]
+  (let [url        (:tarball test)
+        local-file (second (re-find #"file://(.+)" url))
+        tpath      (if local-file "file:///tmp/cassandra.tar.gz" url)]
+    (info node "installing Cassandra from" url)
+    (do (when local-file
+          (c/upload local-file "/tmp/cassandra.tar.gz"))
+      (cu/install-archive! tpath "~/cassandra"))))
 
 (defn configure!
   "Uploads configuration files to the given node."
@@ -212,14 +178,14 @@
                 "'/JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog=.*\"/d'"]]
      (c/exec :sed :-i (lit rep) "~/cassandra/conf/cassandra-env.sh"))
    (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
-                      "\"s/row_cache_size_in_mb: .*/row_cache_size_in_mb: 20/g\""
-                      "\"s/seeds: .*/seeds: 'n1,n2'/g\""
+                      (str "\"s/seeds: .*/seeds: '"
+                           (first (:nodes test)) ","
+                           (second (:nodes test)) "'/g\"")
                       (str "\"s/listen_address: .*/listen_address: " (dns-resolve node)
                            "/g\"")
                       (str "\"s/rpc_address: .*/rpc_address: " (dns-resolve node) "/g\"")
                       (str "\"s/broadcast_rpc_address: .*/broadcast_rpc_address: "
-                           (net/local-ip) "/g\"")
-                      "\"s/internode_compression: .*/internode_compression: none/g\""
+                           (cn/local-ip) "/g\"")
                       (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: "
                            (disable-hints?) "/g\"")
                       "\"s/commitlog_sync: .*/commitlog_sync: batch/g\""
@@ -237,9 +203,7 @@
    (c/exec :echo (str "JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog="
                       (coordinator-batchlog-disabled?) "\"")
            :>> "~/cassandra/conf/cassandra-env.sh")
-   (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "~/cassandra/conf/logback.xml")
-   (c/exec :echo (str "auto_bootstrap: " (boolean ((-> test :bootstrap deref) node)))
-           :>> "~/cassandra/conf/cassandra.yaml")))
+   (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "~/cassandra/conf/logback.xml")))
 
 (defn start!
   "Starts Cassandra."
@@ -289,7 +253,7 @@
       (when (seq (System/getenv "LEAVE_CLUSTER_RUNNING"))
         (wipe! node))
       (doto node
-        (install! version)
+        (install! test)
         (configure! test)
         (guarded-start! test)))
 
