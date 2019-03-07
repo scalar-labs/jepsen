@@ -210,8 +210,7 @@
   [node test]
   (info node "starting Cassandra")
   (c/su
-   (c/exec (lit "~/cassandra/bin/cassandra -R"))
-   (c/exec :sleep :60)))
+   (c/exec (lit "~/cassandra/bin/cassandra -R"))))
 
 (defn guarded-start!
   "Guarded start that only starts nodes that have joined the cluster already
@@ -245,6 +244,14 @@
    (meh (c/exec :rm :-r "~/cassandra/data/commitlog"))
    (meh (c/exec :rm :-r "~/cassandra/data/saved_caches"))))
 
+(defn wait-turn
+  "A node has to wait because Cassandra node can't start when another node is bootstrapping"
+  [node test]
+  (let [nodes (:nodes test)
+        indexed-nodes (zipmap nodes (range (count nodes)))
+        idx (indexed-nodes node)]
+    (Thread/sleep (* 1000 60 idx))))
+
 (defn db
   "Cassandra for a particular version."
   [version]
@@ -255,6 +262,7 @@
       (doto node
         (install! test)
         (configure! test)
+        (wait-turn test)
         (guarded-start! test)))
 
     (teardown! [_ test node]

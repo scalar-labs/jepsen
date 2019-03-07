@@ -62,7 +62,7 @@
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
-   (jc/tarball-opt "http://www.us.apache.org/dist/cassandra/3.11.3/apache-cassandra-3.11.3-bin.tar.gz")])
+   (jc/tarball-opt "http://www.us.apache.org/dist/cassandra/3.11.4/apache-cassandra-3.11.4-bin.tar.gz")])
 
 (defn combine-nemesis
   "Combine nemesis options with bootstrapper and decommissioner"
