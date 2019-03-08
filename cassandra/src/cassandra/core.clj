@@ -125,7 +125,7 @@
 (defn nodetool
   "Run a nodetool command"
   [node & args]
-  (c/on node (apply c/exec (lit "~/cassandra/bin/nodetool") args)))
+  (c/on node (apply c/exec (lit "/root/cassandra/bin/nodetool") args)))
 
 ; This policy should only be used for final reads! It tries to
 ; aggressively get an answer from an unstable cluster after
@@ -158,7 +158,7 @@
     (info node "installing Cassandra from" url)
     (do (when local-file
           (c/upload local-file "/tmp/cassandra.tar.gz"))
-      (cu/install-archive! tpath "~/cassandra"))))
+      (cu/install-archive! tpath "/root/cassandra"))))
 
 (defn configure!
   "Uploads configuration files to the given node."
@@ -176,7 +176,7 @@
                      ".authenticate=true\"/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management"
                      ".jmxremote.authenticate=false\"/g'")
                 "'/JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog=.*\"/d'"]]
-     (c/exec :sed :-i (lit rep) "~/cassandra/conf/cassandra-env.sh"))
+     (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra-env.sh"))
    (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
                       (str "\"s/seeds: .*/seeds: '"
                            (first (:nodes test)) ","
@@ -199,18 +199,18 @@
                        ["\"s/#commitlog_compression.*/commitlog_compression:/g\""
                         (str "\"s/#   - class_name: LZ4Compressor/"
                              "    - class_name: LZ4Compressor/g\"")]))]
-     (c/exec :sed :-i (lit rep) "~/cassandra/conf/cassandra.yaml"))
+     (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra.yaml"))
    (c/exec :echo (str "JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog="
                       (coordinator-batchlog-disabled?) "\"")
-           :>> "~/cassandra/conf/cassandra-env.sh")
-   (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "~/cassandra/conf/logback.xml")))
+           :>> "/root/cassandra/conf/cassandra-env.sh")
+   (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "/root/cassandra/conf/logback.xml")))
 
 (defn start!
   "Starts Cassandra."
   [node test]
   (info node "starting Cassandra")
   (c/su
-   (c/exec (lit "~/cassandra/bin/cassandra -R"))))
+   (c/exec (lit "/root/cassandra/bin/cassandra -R"))))
 
 (defn guarded-start!
   "Guarded start that only starts nodes that have joined the cluster already
@@ -238,11 +238,11 @@
   (stop! node)
   (info node "deleting data files")
   (c/su
-   (meh (c/exec :rm :-r "~/cassandra/logs"))
-   (meh (c/exec :rm :-r "~/cassandra/data/data"))
-   (meh (c/exec :rm :-r "~/cassandra/data/hints"))
-   (meh (c/exec :rm :-r "~/cassandra/data/commitlog"))
-   (meh (c/exec :rm :-r "~/cassandra/data/saved_caches"))))
+   (meh (c/exec :rm :-r "/root/cassandra/logs"))
+   (meh (c/exec :rm :-r "/root/cassandra/data/data"))
+   (meh (c/exec :rm :-r "/root/cassandra/data/hints"))
+   (meh (c/exec :rm :-r "/root/cassandra/data/commitlog"))
+   (meh (c/exec :rm :-r "/root/cassandra/data/saved_caches"))))
 
 (defn wait-turn
   "A node has to wait because Cassandra node can't start when another node is bootstrapping"
@@ -271,7 +271,7 @@
 
     db/LogFiles
     (log-files [db test node]
-      ["~/cassandra/logs/system.log"])))
+      ["/root/cassandra/logs/system.log"])))
 
 (def add {:type :invoke :f :add :value 1})
 (def sub {:type :invoke :f :add :value -1})
