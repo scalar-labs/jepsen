@@ -23,7 +23,7 @@
   (invoke! [this test op]
     (let [[k v] (:value op)]
       (c/with-conflict-as-fail op
-        (c/with-txn test [t conn]
+        (c/with-txn [t conn]
           (case (:f op)
             :upsert (let [inserted (c/upsert! t
                                               :email
@@ -54,7 +54,7 @@
   "Ensures that at most one UID is ever returned from any read."
   []
   (reify checker/Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [reads       (->> history
                              (filter op/ok?)
                              (filter #(= :read (:f %))))

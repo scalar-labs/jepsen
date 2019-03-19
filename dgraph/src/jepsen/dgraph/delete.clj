@@ -32,7 +32,7 @@
   (invoke! [this test op]
     (let [[k v] (:value op)]
       (c/with-conflict-as-fail op
-        (c/with-txn test [t conn]
+        (c/with-txn [t conn]
           (case (:f op)
             :read (->> (c/query t (str "{ q(func: eq(key, $key)) {\n"
                                        "  uid\n"
@@ -67,7 +67,7 @@
   record with both a :uid and a :key."
   []
   (reify checker/Checker
-    (check [_ test model history opts]
+    (check [_ test history opts]
       (let [k (:history-key opts)
             reads (->> history
                        (filter (fn [{:keys [f type value]}]

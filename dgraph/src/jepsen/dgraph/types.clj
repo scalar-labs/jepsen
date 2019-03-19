@@ -32,7 +32,7 @@
 
   (invoke! [this test op]
     (c/with-conflict-as-fail op
-      (c/with-txn test [t conn]
+      (c/with-txn [t conn]
         ; We take entity-attribute-value triples
         (let [[e a v] (:value op)]
           (case (:f op)
@@ -61,7 +61,7 @@
   "Checks to make sure that things we write come back out the same way"
   []
   (reify checker/Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       ; First pass: figure out what we supposedly wrote to the DB
       (let [state (->> history
                        (r/filter op/ok?)

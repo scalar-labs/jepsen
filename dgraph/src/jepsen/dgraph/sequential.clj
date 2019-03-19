@@ -75,7 +75,7 @@
   (invoke! [this test op]
     (let [[k _] (:value op)]
       (c/with-conflict-as-fail op
-        (c/with-txn test [t conn]
+        (c/with-txn [t conn]
           (case (:f op)
             :inc (let [{:keys [uid value] :or {value 0}}
                        (->> (c/query t "{ q(func: eq(key, $key)) {
@@ -91,13 +91,13 @@
                    (assoc op :type :ok, :value (independent/tuple k value)))
 
             :read (-> (c/query t "{ q(func: eq(key, $key)) { uid, value } }"
-                                {:key k})
-                       :q
-                       first
-                       :value
-                       (or 0)
-                       (->> (independent/tuple k)
-                            (assoc op :type :ok, :value))))))))
+                               {:key k})
+                      :q
+                      first
+                      :value
+                      (or 0)
+                      (->> (independent/tuple k)
+                           (assoc op :type :ok, :value))))))))
 
   (teardown! [this test])
 
@@ -130,7 +130,7 @@
   "This checks a single register; we generalize it using independent/checker."
   []
   (reify checker/Checker
-    (check [_ test model history opts]
+    (check [_ test history opts]
       (let [errs (non-monotonic-pairs history)]
         {:valid? (empty? errs)
          :non-monotonic errs}))))
@@ -196,7 +196,7 @@
   "Plots interesting bits of the value as seen by each process history."
   []
   (reify checker/Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       ; Identify interesting regions
       (let [history (->> history
                          (r/filter (fn [op]

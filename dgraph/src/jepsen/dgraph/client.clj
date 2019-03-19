@@ -26,7 +26,7 @@
 (def default-port "Default dgraph alpha GRPC port" 9080)
 
 ;; milliseconds given to the grpc blockingstub as a deadline
-(def deadline 20000)
+(def deadline 30000)
 
 (defn open
   "Creates a new DgraphClient for the given node."
@@ -63,8 +63,6 @@
            :aborted
            (throw e))))))
 
-;; TODO Takes options map but is no longer used since client sequencing has been
-;;      removed. need to clean up call sites to stop passing in the test map
 (defmacro with-txn
   "Takes a vector of a symbol and a client. Opens a transaction on the client,
   binds it to that symbol, and evaluates body. Calls commit at the end of
@@ -73,20 +71,14 @@
   If you commit or abort the transaction *within* body (e.g. before with-txn
   commits it for you), with-txn will attempt to commit, *not* throw, and return
   the result of `body`."
-  [opts [txn-sym client] & body]
+  [[txn-sym client] & body]
   `(let [~txn-sym (.newTransaction ^DgraphClient ~client)]
      (try
        (let [res# (do ~@body)]
-         (try (.commit ~txn-sym)
-              ;; if our trasaction aborts when we try to complete it, we
-              ;; want to pass the value back up
-              (catch io.grpc.StatusRuntimeException e#
-                (if (re-find #"ABORTED" (.getMessage e#))
-                  res#
-                  (throw e#)))
-              ;; If the user manually committed or aborted, that's OK.
-              (catch io.dgraph.TxnFinishedException e#
-                nil))
+         (try
+           (.commit ~txn-sym)
+           ;; If the user manually committed or aborted, that's OK.
+           (catch io.dgraph.TxnFinishedException e#))
          res#)
        (finally
          (.discard ~txn-sym)))))
@@ -159,7 +151,6 @@
               #"This server doesn't serve group id:"
               (assoc ~op :type :fail, :error :server-doesn't-serve-group)
 
-              ;; FIXME For some reason these don't get caught??
               #"ABORTED"
               (assoc ~op :type :fail, :error :transaction-aborted)
 
@@ -180,16 +171,22 @@
   we can retry, at least in this context?"
   [^DgraphClient client & schemata]
   (t/with-trace "client.alter-schema!"
-    (with-retry [i 0]
+    (with-retry [i 10]
       (.alter client (.. (DgraphProto$Operation/newBuilder)
                          (setSchema (str/join "\n" schemata))
                          build))
-      (catch io.grpc.StatusRuntimeException e
-        (if (and (< i 3)
-                 (re-find #"DEADLINE_EXCEEDED" (.getMessage e)))
-          (do (warn "Alter schema failed due to DEADLINE_EXCEEDED, retrying...")
-              (retry (inc i)))
-          (throw e))))))
+
+      (catch java.util.concurrent.CompletionException e
+        (let [message (.getMessage e)]
+          (if (and (< 0 i)
+                   (or (re-find #"DEADLINE_EXCEEDED" message)
+                       (re-find #"Pending transactions" message)
+                       (re-find #"ABORTED" message)))
+            (do
+              (warn "alter-schema! failed due to retriable error, retrying...")
+              (Thread/sleep (rand-int 5000))
+              (retry (dec i)))
+            (throw e)))))))
 
 (defn ^DgraphProto$Assigned mutate!*
   "Takes a mutation object and applies it to a transaction. Returns an
@@ -309,7 +306,7 @@
   client."
   [client]
   (with-retry [attempts 16]
-    (with-txn {} [t client]
+    (with-txn [t client]
       (schema t))
     (catch io.grpc.StatusRuntimeException e
       (cond (<= attempts 1)
@@ -350,9 +347,9 @@
                                   "  }\n"
                                   "}")
                            {:a pred-value}))]
-                                        ;(info "Query results:" res)
+        ;;(info "Query results:" res)
         (when (empty? (:all res))
-                                        ;(info "Inserting...")
+          ;;(info "Inserting...")
           (mutate! t record)))
 
       (throw (IllegalArgumentException.
@@ -362,16 +359,14 @@
 (defn gen-pred
   "Generates a predicate for a key, given a count of keys, and a prefix."
   [prefix n k]
-  (t/with-trace "client.gen-pred"
-    (str prefix "_" (mod (hash k) n))))
+  (str prefix "_" (mod (hash k) n)))
 
 (defn gen-preds
   "Given a key prefix and a number of keys, generates all predicate names that
   might be used."
   [prefix n]
-  (t/with-trace "client.gen-preds"
-    (->> (range n)
-         (map (fn [i] (str prefix "_" i))))))
+  (->> (range n)
+       (map (fn [i] (str prefix "_" i)))))
 
 (defrecord TxnClient [opts conn]
   jc/Client
@@ -391,7 +386,7 @@
 
   (invoke! [this test op]
     (with-conflict-as-fail op
-      (with-txn test [t conn]
+      (with-txn [t conn]
         (->> (:value op)
              (reduce
               (fn [txn' [f k v :as micro-op]]

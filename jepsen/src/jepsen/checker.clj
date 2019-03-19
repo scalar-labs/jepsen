@@ -2,14 +2,16 @@
   "Validates that a history is correct with respect to some model."
   (:refer-clojure :exclude [set])
   (:require [clojure.stacktrace :as trace]
-            [clojure.core :as core]
+            [clojure.core :as c]
             [clojure.core.reducers :as r]
             [clojure.set :as set]
             [clojure.java.io :as io]
             [clojure.tools.logging :refer [info warn]]
-            [jepsen.util :as util :refer [meh fraction]]
+            [potemkin :refer [definterface+]]
+            [jepsen.util :as util :refer [meh fraction map-kv]]
             [jepsen.store :as store]
-            [jepsen.checker.perf :as perf]
+            [jepsen.checker [perf :as perf]
+                            [clock :as clock]]
             [multiset.core :as multiset]
             [gnuplot.core :as g]
             [knossos [model :as model]
@@ -45,7 +47,7 @@
           valids))
 
 (defprotocol Checker
-  (check [checker test model history opts]
+  (check [checker test history opts]
          "Verify the history is correct. Returns a map like
 
          {:valid? true}
@@ -59,16 +61,27 @@
          Opts is a map of options controlling checker execution. Keys include:
 
          :subdirectory - A directory within this test's store directory where
-                         output files should be written. Defaults to nil."))
+                         output files should be written. Defaults to nil.
+
+          DEPRECATED Checkers should now implement the 4-arity check method
+          without model. If the checker still needs a model, provide it at
+          construction rather than as an argument to `Checker/check`. See the
+          queue and linearizable checkers for examples."))
+
+(defn noop
+  "An empty checker that only returns nil."
+  []
+  (reify Checker
+    (check [_ _ _ _])))
 
 (defn check-safe
   "Like check, but wraps exceptions up and returns them as a map like
 
   {:valid? :unknown :error \"...\"}"
-  ([checker test model history]
-   (check-safe checker test model history {}))
-  ([checker test model history opts]
-   (try (check checker test model history opts)
+  ([checker test history]
+   (check-safe checker test history {}))
+  ([checker test history opts]
+   (try (check checker test history opts)
         (catch Exception t
           (warn t "Error while checking history:")
           {:valid? :unknown
@@ -81,10 +94,10 @@
   valid."
   [checker-map]
   (reify Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [results (->> checker-map
                          (pmap (fn [[k checker]]
-                                 [k (check-safe checker test model history opts)]))
+                                 [k (check-safe checker test history opts)]))
                          (into {}))]
         (assoc results :valid? (merge-valid (map :valid? (vals results))))))))
 
@@ -99,9 +112,9 @@
   ; often.
   (let [sem (Semaphore. limit true)]
     (reify Checker
-      (check [this test model history opts]
+      (check [this test history opts]
         (try (.acquire sem)
-             (check checker test model history opts)
+             (check checker test history opts)
              (finally
                (.release sem)))))))
 
@@ -109,34 +122,40 @@
   "Everything is awesoooommmmme!"
   []
   (reify Checker
-    (check [this test model history opts] {:valid? true})))
+    (check [this test history opts] {:valid? true})))
 
 (defn linearizable
   "Validates linearizability with Knossos. Defaults to the competition checker,
-  but can be controlled by passing either :linear or :wgl."
-  ([]
-   (linearizable :competition))
-  ([algorithm]
-     (reify Checker
-       (check [this test model history opts]
-         (let [a ((case algorithm
-                    :competition  competition/analysis
-                    :linear       linear/analysis
-                    :wgl          wgl/analysis)
-                  model history)]
-           (when-not (:valid? a)
-             (try
-               ; Renderer can't handle really broad concurrencies yet
-               (linear.report/render-analysis!
-                 history a (.getCanonicalPath
-                             (store/path! test (:subdirectory opts)
-                                          "linear.svg")))
-               (catch Throwable e
-                 (warn e "Error rendering linearizability analysis"))))
-           ; Writing these can take *hours* so we truncate
-           (assoc a
-                  :final-paths (take 10 (:final-paths a))
-                  :configs     (take 10 (:configs a))))))))
+  but can be controlled by passing either :linear or :wgl.
+
+  Takes an options map for arguments, ex.
+  {:model (model/cas-register)
+   :algorithm :wgl}"
+  [{:keys [algorithm model]}]
+  (assert model
+          (str "The linearizable checker requires a model. It received: "
+               model
+               " instead."))
+  (reify Checker
+    (check [this test history opts]
+      (let [a ((case algorithm
+                 :linear       linear/analysis
+                 :wgl          wgl/analysis
+                 competition/analysis)
+               model history)]
+        (when-not (:valid? a)
+          (try
+            ;; Renderer can't handle really broad concurrencies yet
+            (linear.report/render-analysis!
+             history a (.getCanonicalPath
+                        (store/path! test (:subdirectory opts)
+                                     "linear.svg")))
+            (catch Throwable e
+              (warn e "Error rendering linearizability analysis"))))
+        ;; Writing these can take *hours* so we truncate
+        (assoc a
+               :final-paths (take 10 (:final-paths a))
+               :configs     (take 10 (:configs a)))))))
 
 (defn queue
   "Every dequeue must come from somewhere. Validates queue operations by
@@ -144,16 +163,16 @@
   then reducing the model with that history. Every subhistory of every queue
   should obey this property. Should probably be used with an unordered queue
   model, because we don't look for alternate orderings. O(n)."
-  []
+  [model]
   (reify Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [final (->> history
                        (r/filter (fn select [op]
                                    (condp = (:f op)
                                      :enqueue (op/invoke? op)
                                      :dequeue (op/ok? op)
                                      false)))
-                                 (reduce model/step model))]
+                       (reduce model/step model))]
         (if (model/inconsistent? final)
           {:valid? false
            :error  (:msg final)}
@@ -166,7 +185,7 @@
   contains only elements for which an add was attempted."
   []
   (reify Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [attempts (->> history
                           (r/filter op/invoke?)
                           (r/filter #(= :add (:f %)))
@@ -178,15 +197,15 @@
                       (r/map :value)
                       (into #{}))
             final-read (->> history
-                          (r/filter op/ok?)
-                          (r/filter #(= :read (:f %)))
-                          (r/map :value)
-                          (reduce (fn [_ x] x) nil))]
+                            (r/filter op/ok?)
+                            (r/filter #(= :read (:f %)))
+                            (r/map :value)
+                            (reduce (fn [_ x] x) nil))]
         (if-not final-read
           {:valid? :unknown
            :error  "Set was never read"}
 
-          (let [final-read (core/set final-read)
+          (let [final-read (c/set final-read)
 
                 ; The OK set is every read value which we tried to add
                 ok          (set/intersection final-read attempts)
@@ -212,6 +231,307 @@
              :lost                (util/integer-interval-set-str lost)
              :unexpected          (util/integer-interval-set-str unexpected)
              :recovered           (util/integer-interval-set-str recovered)}))))))
+
+
+(definterface+ ISetFullElement
+  (set-full-add [element-state op])
+  (set-full-read-present [element-state inv op])
+  (set-full-read-absent  [element-state inv op]))
+
+; Tracks the state of each element for set-full analysis
+;
+; We're looking for a few key points here:
+;
+; The add time is inferred from either the add *or* the first read to observe
+; the op, whichever finishes first.
+;
+; To find the *stable time*, we need to know the most recent missing
+; invocation. If we have any successful read invocation *after* it, then we know
+; the record was stable.
+;
+; To find the *lost time*, we need to know the most recent observed invocation.
+; If we have any lost invocation *more* recent than that, then we know that the
+; record was lost.
+(defrecord SetFullElement [element
+                           known
+                           last-present
+                           last-absent]
+  ISetFullElement
+  (set-full-add [this op]
+    (condp = (:type op)
+      ; Record the completion of the add op
+      :ok (assoc this :known (or known op))
+      this))
+
+  (set-full-read-present [this iop op]
+    (assoc this
+           :known (or known op)
+
+           :last-present
+           (if (or (nil? last-present)
+                   (< (:index last-present) (:index iop)))
+             iop
+             last-present)))
+
+  (set-full-read-absent [this iop op]
+    (if (or (nil? last-absent)
+            (< (:index last-absent) (:index iop)))
+      (assoc this :last-absent iop)
+      this)))
+
+(defn set-full-element
+  "Given an add invocation, constructs a new set element state record to track
+  that element"
+  [op]
+  (map->SetFullElement {:element (:value op)}))
+
+(defn set-full-element-results
+  "Takes a SetFullElement and computes a map of final results from it:
+
+      :element         The element itself
+      :outcome         :stable, :lost, :never-read
+      :lost-latency
+      :stable-latency"
+  [e]
+  (let [known        (:known e)
+        known-time   (:time (:known e))
+        last-present (:last-present e)
+        last-absent (:last-absent e)
+
+        stable?     (boolean
+                      (and last-present
+                           (< (:index last-absent -1)
+                              (:index last-present))))
+        ; Note that there exist two asymmetries here.
+        ; First, an element has to be known in order for its absence to mean
+        ; anything. If it is never confirmed nor observed, it's ok for it not
+        ; to exist. We check to make sure the element is actually known.
+
+        ; Second, if a read concurrent with the add of an element e observes e,
+        ; then we know e exists. However, a concurrent read which *fails* to
+        ; observe e could have linearized before the add. We check the
+        ; concurrency windows to make sure the last lost operation didn't
+        ; overlap with the known complete time; if the most recent failed read
+        ; was also *concurrent* with the add, we call that never-read, rather
+        ; than lost.
+        lost?       (boolean
+                      (and known
+                           last-absent
+                           (< (:index last-present -1)
+                              (:index last-absent))
+                           (< (:index (:known e))
+                              (:index last-absent))))
+        never-read  (not (or stable? lost?))
+
+        ; TODO: 0 isn't really right; we'd need to track the first present
+        ; invocations to get these times.
+        ; TODO: We should also be smarter about
+        ; getting the first absent invocation
+        ; *after* the most recent present invocation
+        stable-time (when stable?
+                      (if last-absent (inc (:time last-absent)) 0))
+        lost-time   (when lost?
+                      (if last-present (inc (:time last-present)) 0))
+
+        stable-latency (when stable?
+                         (-> stable-time (- known-time) (max 0)
+                             util/nanos->ms long))
+        lost-latency   (when lost?
+                         (-> lost-time (- known-time) (max 0)
+                             util/nanos->ms long))]
+    {:element         (:element e)
+     :outcome         (cond stable?     :stable
+                            lost?       :lost
+                      never-read  :never-read)
+     :stable-latency  stable-latency
+     :lost-latency    lost-latency
+     :known           known
+     :last-absent     last-absent}))
+
+(defn frequency-distribution
+  "Computes a map of percentiles (0--1, not 0--100, we're not monsters) of a
+  collection of numbers, taken at percentiles `points`. If the collection is
+  empty, returns nil."
+  [points c]
+  (let [sorted (sort c)]
+    (when (seq sorted)
+      (let [n (c/count sorted)
+            extract (fn [point]
+                      (let [idx (min (dec n) (int (Math/floor (* n point))))]
+                        (nth sorted idx)))]
+        (->> points (map extract) (zipmap points) (into (sorted-map)))))))
+
+(defn set-full-results
+  "Takes options from set-full, and a collection of SetFullElements. Computes
+  agggregate results; see set-full for details."
+  [opts elements]
+  (let [rs                (mapv set-full-element-results elements)
+        outcomes          (group-by :outcome rs)
+        stale             (->> (:stable outcomes)
+                               (filter (comp pos? :stable-latency)))
+        worst-stale       (->> stale
+                               (sort-by :stable-latency)
+                               reverse
+                               (take 8))
+        stable-latencies  (keep :stable-latency rs)
+        lost-latencies    (keep :lost-latency rs)
+        m {:valid?             (cond (< 0 (count (:lost outcomes)))   false
+                                     (= 0 (count (:stable outcomes))) :unknown
+                                     (and (:linearizable? opts)
+                                          (< 0 (count stale)))        false
+                                     true                             true)
+           :attempt-count      (count rs)
+           :stable-count       (count (:stable outcomes))
+           :lost-count         (count (:lost outcomes))
+           :lost               (sort (map :element (:lost outcomes)))
+           :never-read-count   (count (:never-read outcomes))
+           :never-read         (sort (map :element (:never-read outcomes)))
+           :stale-count        (count stale)
+           :stale              (sort (map :element stale))
+           :worst-stale        worst-stale}
+        points [0 0.5 0.95 0.99 1]
+        m (if (seq stable-latencies)
+            (assoc m :stable-latencies
+                   (frequency-distribution points stable-latencies))
+            m)
+        m (if (seq lost-latencies)
+            (assoc m :lost-latencies
+                   (frequency-distribution points lost-latencies))
+            m)]
+    m))
+
+(defn set-full
+  "A more rigorous set analysis. We allow :add operations which add a single
+  element, and :reads which return all elements present at that time. For each
+  element, we construct a timeline like so:
+
+      [nonexistent] ... [created] ... [present] ... [absent] ... [present] ...
+
+  For each element:
+
+  The *add* is the operation which added that element.
+
+  The *known time* is the completion time of the add, or first read, whichever
+  is earlier.
+
+  The *stable time* is the time after which every read which begins observes
+  the element. If every read beginning after the add time observes
+  the element, the stable time is the add time. If the final read fails to
+  observe the element, the stable time is nil.
+
+  A *stable element* is one which has a stable time.
+
+  The *lost time* is the time after which no operation observes that element.
+  If the most final read observes the element, the lost time is nil.
+
+  A *lost element* is one which has a lost time.
+
+  An element can be either stable or lost, but not both.
+
+  The *first read latency* is 0 if the first read invoked after the add time
+  observes the element. If the element is never observed, it is nil. Otherwise,
+  the first read delay is the time from the completion of the write to the
+  invocation of the first read.
+
+  The *stable latency* is the time between the add time and the stable time, or
+  0, whichever is greater.
+
+  Options are:
+
+      :linearizable?    If true, we expect this set to be linearizable, and
+                        stale reads result in an invalid result.
+
+  Computes aggregate results:
+
+      :valid?               False if there were any lost elements.
+                            :unknown if there were no lost *or* stale elements;
+                            e.g. if the test never inserted anything, every
+                            insert crashed, etc. For :linearizable? tests,
+                            false if there were lost *or* stale elements.
+      :attempt-count        Number of attempted inserts
+      :stable-count         Number of elements which had a time after which
+                            they were always found
+      :lost                 Elements which had a time after which
+                            they were never found
+      :lost-count           Number of lost elements
+      :never-read           Elements where no read began after the time when
+                            that element was known to have been inserted.
+                            Includes elements which were never known to have
+                            been inserted.
+      :never-read-count     Number of elements never read
+      :stale                Elements which failed to appear in a read beginning
+                            after we knew the operation completed.
+      :stale-count          Number of stale elements.
+      :worst-stale          Detailed description of stale elements with the
+                            highest stable latencies; e.g. which ones took the
+                            longest to show up.
+      :stable-latencies     Map of quantiles to latencies, in milliseconds, it
+                            took for elements to become stable. 0 indicates the
+                            element was linearizable.
+      :lost-latencies       Map of quantiles to latencies, in milliseconds, it
+                            took for elements to become lost. 0 indicates the
+                            element was known to be inserted, but never
+                            observed."
+  ([]
+   (set-full {:linearizable? false}))
+  ([checker-opts]
+  (reify Checker
+    (check [this test history opts]
+      ; Build up a map of elements to element states. We track the current set
+      ; of ongoing reads as well, so we can map completions back to
+      ; invocations. Finally we track a map of duplicates: elements to maximum
+      ; multiplicities for that element in any given read.
+      (let [[elements reads dups]
+            (->> history
+                 (r/filter (comp number? :process)) ; Ignore the nemesis
+                 (reduce (fn red [[elements reads dups] op]
+                           (let [v (:value op)
+                                 p (:process op)]
+                             (condp = (:f op)
+                               :add
+                               (if (= :invoke (:type op))
+                                 ; Track a new element
+                                 [(assoc elements v (set-full-element op))
+                                  reads dups]
+                                 ; Oh good, it completed
+                                 [(update elements v set-full-add op)
+                                  reads dups])
+
+                               :read
+                               (condp = (:type op)
+                                 :invoke [elements (assoc reads p op) dups]
+                                 :fail   [elements (dissoc reads p op) dups]
+                                 :info   [elements reads dups]
+                                 :ok
+                                 ; We read stuff! Update every element
+                                 (let [inv (get reads (:process op))
+                                       ; Find duplicates
+                                       dups' (->> (frequencies v)
+                                                  (reduce (fn [m [k v]]
+                                                            (if (< v 1)
+                                                              (assoc m k v)
+                                                              m))
+                                                          (sorted-map))
+                                                  (merge-with max dups))
+                                       v   (c/set v)]
+                                   ; Process visibility of all elements
+                                   [(map-kv (fn update-all [[element state]]
+                                              [element
+                                               (if (contains? v element)
+                                                 (set-full-read-present
+                                                   state inv op)
+                                                 (set-full-read-absent
+                                                   state inv op))])
+                                            elements)
+                                    reads
+                                    dups'])))))
+                         [{} {} {}]))
+            set-results (set-full-results checker-opts
+                                          (mapv val (sort elements)))]
+        (assoc set-results
+               :valid?           (and (empty? dups) (:valid? set-results))
+               :duplicated-count (count dups)
+               :duplicated       dups))))))
 
 (defn expand-queue-drain-ops
   "Takes a history. Looks for :drain operations with their value being a
@@ -253,7 +573,7 @@
   draining them completely. O(n)."
   []
   (reify Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [history  (expand-queue-drain-ops history)
             attempts (->> history
                           (r/filter op/invoke?)
@@ -277,7 +597,7 @@
             ; leftovers from some earlier state. Definitely don't want your
             ; queue emitting records from nowhere!
             unexpected (->> dequeues
-                            (remove (core/set (keys (multiset/multiplicities
+                            (remove (c/set (keys (multiset/multiplicities
                                                  attempts))))
                             (into (multiset/multiset)))
 
@@ -322,7 +642,7 @@
        :range               [lowest-id highest-id]}"
   []
   (reify Checker
-    (check [this test model history opts]
+    (check [this test history opts]
       (let [attempted-count (->> history
                                  (filter op/invoke?)
                                  (filter #(= :generate (:f %)))
@@ -359,12 +679,9 @@
 (defn counter
   "A counter starts at zero; add operations should increment it by that much,
   and reads should return the present value. This checker validates that at
-  each read, the value is at greater than the sum of all :ok increments, and
-  lower than the sum of all attempted increments.
-
-  Note that this counter verifier assumes the value monotonically increases. If
-  you want to increment by negative amounts, you'll have to recalculate and
-  possibly widen the intervals for all pending reads with each invoke/ok write.
+  each read, the value is greater than the sum of all :ok increments and
+  attempted decrements, and lower than the sum of all attempted increments and
+  :ok decrements.
 
   Returns a map:
 
@@ -376,8 +693,13 @@
   "
   []
   (reify Checker
-    (check [this test model history opts]
-      (loop [history            (seq (history/complete history))
+    (check [this test history opts]
+      ; pre-process our history so failed adds do not get applied
+      (loop [history         (->> history
+                                  history/complete
+                                  (remove :fails?)
+                                  (remove op/fail?)
+                                  seq)
              lower              0             ; Current lower bound on counter
              upper              0             ; Upper bound on counter value
              pending-reads      {}            ; Process ID -> [lower read-val]
@@ -412,24 +734,43 @@
                 (recur history lower upper pending-reads reads))))))))
 
 (defn latency-graph
-  "Spits out graphs of latencies."
-  []
-  (reify Checker
-    (check [_ test model history opts]
-      (perf/point-graph! test history opts)
-      (perf/quantiles-graph! test history opts)
-      {:valid? true})))
+  "Spits out graphs of latencies. Checker options take precedence over
+  those passed in with this constructor."
+  ([]
+   (latency-graph {}))
+  ([opts]
+   (reify Checker
+     (check [_ test history c-opts]
+       (let [o (merge opts c-opts)]
+         (perf/point-graph!     test history o)
+         (perf/quantiles-graph! test history o)
+         {:valid? true})))))
 
 (defn rate-graph
-  "Spits out graphs of throughput over time."
-  []
-  (reify Checker
-    (check [_ test model history opts]
-      (perf/rate-graph! test history opts)
-      {:valid? true})))
+  "Spits out graphs of throughput over time. Checker options take precedence over
+  those passed in with this constructor."
+  ([]
+   (rate-graph {}))
+  ([opts]
+   (reify Checker
+     (check [_ test history c-opts]
+       (let [o (merge opts c-opts)]
+         (perf/rate-graph! test history o)
+         {:valid? true})))))
 
 (defn perf
-  "Assorted performance statistics"
+  "Composes various performance statistics. Checker options take precedence over
+  those passed in with this constructor."
+  ([]
+   (perf {}))
+  ([opts]
+   (compose {:latency-graph (latency-graph opts)
+             :rate-graph    (rate-graph opts)})))
+
+(defn clock-plot
+  "Plots clock offsets on all nodes"
   []
-  (compose {:latency-graph (latency-graph)
-            :rate-graph    (rate-graph)}))
+  (reify Checker
+    (check [_ test history opts]
+      (clock/plot! test history opts)
+      {:valid? true})))
