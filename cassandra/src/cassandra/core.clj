@@ -104,8 +104,10 @@
                                 :LiveNodes))
                       (catch Exception e
                         (info "Couldn't get status from node" node))))
-               (-> test :nodes set (set/difference @(:bootstrap test))
-                   set (set/difference @(:decommission test))
+               (-> test
+                   :nodes
+                   set
+                   (set/difference @(:decommissioned test))
                    shuffle))
     (dns-hostnames test)))
 
@@ -118,8 +120,10 @@
                                   :JoiningNodes))
                       (catch Exception e
                         (info "Couldn't get status from node" node))))
-               (-> test :nodes set (set/difference @(:bootstrap test))
-                   (#(map (comp dns-resolve name) %)) set (set/difference @(:decommission test))
+               (-> test
+                   :nodes
+                   set
+                   (set/difference @(:decommissioned test))
                    shuffle))))
 
 (defn nodetool
@@ -217,9 +221,8 @@
   through initial DB lifecycle or a bootstrap. It will not start decommissioned
   nodes."
   [node test]
-  (let [bootstrap (:bootstrap test)
-        decommission (:decommission test)]
-    (when-not (or (@bootstrap node) (->> node name dns-resolve (get decommission)))
+  (let [decommissioned (:decommissioned test)]
+    (when-not (@decommissioned node)
       (start! node test))))
 
 (defn stop!

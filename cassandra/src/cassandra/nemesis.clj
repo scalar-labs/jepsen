@@ -28,9 +28,7 @@
       long
       (take (shuffle xs))
       set
-      (set/difference @(:bootstrap test))
-      set
-      (set/difference @(:decommission test))
+      (set/difference @(:decommissioned test))
       shuffle))
 
 (defn test-aware-node-start-stopper
@@ -62,12 +60,15 @@
                               (str "nemesis already disrupting " @nodes))
                             :no-target)
                    :stop (if-let [ns @nodes]
-                           (let [value (c/on-many ns (stop! test (keyword c/*host*)))]
-                             (reset! nodes nil)
-                             value)
+                           (let [restarted (for [node ns] (c/on node (stop! test node)))]
+                            (reset! nodes nil)
+                             restarted)
                            :not-started)))))
 
-      (teardown! [this test]))))
+      (teardown! [this test]
+        (when-let [ns @nodes]
+          (for [node ns] (c/on node (stop! test node)))
+          (reset! nodes nil))))))
 
 (defn crash-nemesis
   "A nemesis that crashes a random subset of nodes."
@@ -75,7 +76,10 @@
   (test-aware-node-start-stopper
    safe-mostly-small-nonempty-subset
    (fn start [test node] (meh (c/su (c/exec :killall :-9 :java))) [:killed node])
-   (fn stop  [test node] (meh (cass/guarded-start! node test)) [:restarted node])))
+   (fn stop  [test node]
+     (meh (cass/guarded-start! node test))
+     (Thread/sleep (* 1000 60))
+     [:restarted node])))
 
 ;; empty nemesis
 (defn none

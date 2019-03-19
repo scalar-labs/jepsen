@@ -13,12 +13,10 @@
   (reify nemesis/Nemesis
     (setup! [this test] this)
     (invoke! [this test op]
-      (let [bootstrap (:bootstrap test)
-            decommission (:decommission test)]
-        (if-let [node (first @bootstrap)]
+      (let [decommissioned (:decommissioned test)]
+        (if-let [node (first @decommissioned)]
           (do (info node "starting bootstrapping")
-              (swap! bootstrap rest)
-              (swap! decommission rest)
+              (swap! decommissioned rest)
               (c/on node (cassandra/start! node test))
               (while (some #{cassandra/dns-resolve (name node)}
                            (cassandra/joining-nodes test))
@@ -33,14 +31,15 @@
   (reify nemesis/Nemesis
     (setup! [this test] this)
     (invoke! [this test op]
-      (let [decommission (:decommission test)
-            bootstrap (:bootstrap test)]
-        (if-let [node (some-> test cassandra/live-nodes (set/difference @decommission)
-                         shuffle (get (:rf test)))] ; keep at least RF nodes
+      (let [decommissioned (:decommissioned test)]
+        (if-let [node (some-> test
+                              cassandra/live-nodes
+                              (set/difference @decommissioned)
+                              shuffle
+                              (get (:rf test)))] ; keep at least RF nodes
           (do (info node "decommissioning")
-              (info @decommission "already decommissioned")
-              (swap! decommission conj node)
-              (swap! bootstrap conj node)
+              (info @decommissioned "already decommissioned")
+              (swap! decommissioned conj node)
               (cassandra/nodetool node "decommission")
               (assoc op :value (str node " decommissioned")))
           (assoc op :value "no nodes eligible for decommission"))))

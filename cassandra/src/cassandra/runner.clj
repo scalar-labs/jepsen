@@ -71,11 +71,10 @@
       (assoc :suffix (str (:name (eval nemesis)) (:name joining) (:name clock)))
       (assoc :join joining)
       (assoc :clock clock)
-      (assoc :bootstrap
+      (assoc :decommissioned
              (if (:bootstrap joining)
                (atom #{(last (:nodes opts))})
                (atom #{})))
-      (assoc :decommission (atom #{}))
       (assoc :nemesis
              (jn/compose
                (conj {#{:start :stop} (:nemesis (eval nemesis))}
