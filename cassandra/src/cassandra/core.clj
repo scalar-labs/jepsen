@@ -19,7 +19,6 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as cn]
              [util :as cu]]
-            [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [clojurewerkz.cassaforte.metadata :as metadata]
             [clojurewerkz.cassaforte.client :as cassandra]
@@ -307,6 +306,5 @@
 (defn cassandra-test
   [name opts]
   (merge tests/noop-test
-         {:name    (str "cassandra-" name)
-          :os      debian/os}
+         {:name    (str "cassandra-" name)}
          opts))
