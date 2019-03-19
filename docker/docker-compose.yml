@@ -19,7 +19,6 @@ services:
     build: ./node
     env_file: ./secret/node.env
     privileged: true
-    mem_limit: 4g
   n1:
     extends: node
     container_name: jepsen-n1
