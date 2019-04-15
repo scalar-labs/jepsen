@@ -98,6 +98,12 @@
   [opts]
   (gen/seq (flatten (repeatedly #(mix-failure opts)))))
 
+(defn terminate-nemesis
+  [opts]
+  (if (or (:bump (:clock opts)) (:strobe (:clock opts)))
+    (gen/nemesis (gen/seq [(gen/once {:type :info :f :stop})
+                           (gen/once (nt/reset-gen opts nil))]))
+    (gen/nemesis (gen/once {:type :info :f :stop}))))
 
 (defn std-gen
   [opts gen]
