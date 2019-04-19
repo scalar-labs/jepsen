@@ -16,7 +16,7 @@
       (let [decommissioned (:decommissioned test)]
         (if-let [node (first @decommissioned)]
           (do (info node "starting bootstrapping")
-              (swap! decommissioned rest)
+              (swap! decommissioned (comp set rest))
               (c/on node (cassandra/start! node test))
               (while (some #{cassandra/dns-resolve (name node)}
                            (cassandra/joining-nodes test))
