@@ -18,7 +18,6 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as net]
              [util :as net/util]]
-            [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]

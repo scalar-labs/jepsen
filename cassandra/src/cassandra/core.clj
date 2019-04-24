@@ -19,6 +19,7 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as cn]
              [util :as cu]]
+            [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [clojurewerkz.cassaforte.metadata :as metadata]
             [clojurewerkz.cassaforte.client :as cassandra]
@@ -158,6 +159,7 @@
   (let [url        (:tarball test)
         local-file (second (re-find #"file://(.+)" url))
         tpath      (if local-file "file:///tmp/cassandra.tar.gz" url)]
+    (c/su (debian/install [:openjdk-8-jre]))
     (info node "installing Cassandra from" url)
     (do (when local-file
           (c/upload local-file "/tmp/cassandra.tar.gz"))
@@ -168,36 +170,28 @@
   [node test]
   (info node "configuring Cassandra")
   (c/su
-   (doseq [rep ["\"s/#MAX_HEAP_SIZE=.*/MAX_HEAP_SIZE='512M'/g\""
-                "\"s/#HEAP_NEWSIZE=.*/HEAP_NEWSIZE='128M'/g\""
+   (doseq [rep ["\"s/#MAX_HEAP_SIZE=.*/MAX_HEAP_SIZE='1G'/g\""
+                "\"s/#HEAP_NEWSIZE=.*/HEAP_NEWSIZE='256M'/g\""
                 "\"s/LOCAL_JMX=yes/LOCAL_JMX=no/g\""
                 (str "'s/# JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname="
-                     "<public name>\"/JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname="
-                     (name node) "\"/g'"
-                     )
+                     "<public name>\"/JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname=" (name node) "\"/g'")
                 (str "'s/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management.jmxremote"
                      ".authenticate=true\"/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management"
                      ".jmxremote.authenticate=false\"/g'")
                 "'/JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog=.*\"/d'"]]
      (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra-env.sh"))
    (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
-                      (str "\"s/seeds: .*/seeds: '"
+                      (str "\"s/- seeds: .*/- seeds: '"
                            (first (:nodes test)) ","
                            (second (:nodes test)) "'/g\"")
-                      (str "\"s/listen_address: .*/listen_address: " (dns-resolve node)
-                           "/g\"")
-                      (str "\"s/rpc_address: .*/rpc_address: " (dns-resolve node) "/g\"")
-                      (str "\"s/broadcast_rpc_address: .*/broadcast_rpc_address: "
-                           (cn/local-ip) "/g\"")
-                      (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: "
-                           (disable-hints?) "/g\"")
+                      (str "\"s/listen_address: .*/listen_address: " (cn/ip node) "/g\"")
+                      (str "\"s/rpc_address: .*/rpc_address: " (cn/ip node) "/g\"")
+                      (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: " (disable-hints?) "/g\"")
                       "\"s/commitlog_sync: .*/commitlog_sync: batch/g\""
                       (str "\"s/# commitlog_sync_batch_window_in_ms: .*/"
                            "commitlog_sync_batch_window_in_ms: 1.0/g\"")
                       "\"s/commitlog_sync_period_in_ms: .*/#/g\""
-                      (str "\"s/# phi_convict_threshold: .*/phi_convict_threshold: " (phi-level)
-                           "/g\"")
-                      "\"/auto_bootstrap: .*/d\""]
+                      (str "\"s/# phi_convict_threshold: .*/phi_convict_threshold: " (phi-level) "/g\"")]
                      (when (compressed-commitlog?)
                        ["\"s/#commitlog_compression.*/commitlog_compression:/g\""
                         (str "\"s/#   - class_name: LZ4Compressor/"
@@ -213,7 +207,7 @@
   [node test]
   (info node "starting Cassandra")
   (c/su
-   (c/exec (lit "/root/cassandra/bin/cassandra -R"))))
+    (c/exec (lit "/root/cassandra/bin/cassandra -R"))))
 
 (defn guarded-start!
   "Guarded start that only starts nodes that have joined the cluster already
@@ -306,5 +300,6 @@
 (defn cassandra-test
   [name opts]
   (merge tests/noop-test
-         {:name    (str "cassandra-" name)}
+         {:name (str "cassandra-" name)
+          :os   debian/os}
          opts))
