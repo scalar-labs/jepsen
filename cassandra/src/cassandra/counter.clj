@@ -111,7 +111,6 @@
   [opts]
   (merge (cassandra-test (str "counter-inc-"  (:suffix opts))
                          {:client (cql-counter-client)
-                          :model nil
                           :generator (->> (repeat 100 add)
                                           (cons r)
                                           (conductors/std-gen opts))
