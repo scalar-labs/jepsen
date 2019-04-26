@@ -18,7 +18,6 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as net]
              [util :as net/util]]
-            [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [knossos.model :as model]
             [clojurewerkz.cassaforte.client :as cassandra]
@@ -131,10 +130,10 @@
   [opts]
   (merge (cassandra-test (str "lwt-" (:suffix opts))
                          {:client (CasRegisterClient. (atom false) nil)
-                          :model (model/cas-register)
                           :generator (gen/phases
                                       (->> [r w cas cas cas]
                                            (conductors/std-gen opts)))
                           :checker (checker/compose
-                                    {:linear (checker/linearizable)})})
+                                    {:linear (checker/linearizable {:model     (model/cas-register)
+                                                                    :algorithm :linear})})})
          opts))

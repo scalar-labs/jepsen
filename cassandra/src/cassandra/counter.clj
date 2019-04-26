@@ -17,7 +17,6 @@
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as net]
              [util :as net/util]]
-            [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
             [clojurewerkz.cassaforte.client :as cassandra]
             [clojurewerkz.cassaforte.query :refer :all]
@@ -112,7 +111,6 @@
   [opts]
   (merge (cassandra-test (str "counter-inc-"  (:suffix opts))
                          {:client (cql-counter-client)
-                          :model nil
                           :generator (->> (repeat 100 add)
                                           (cons r)
                                           (conductors/std-gen opts))

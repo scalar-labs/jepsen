@@ -3,34 +3,26 @@
 This is based on [riptano's jepsen](https://github.com/riptano/jepsen/tree/cassandra/cassandra).
 
 ## Current status
-- Support Apache Cassandra 3.11.x
+- Supports Apache Cassandra 3.11.x
 - Support `collections.map-test`, `collections.set-test`, `batch-test`, `counter-test`(only add) and `lwt-test`
   - Removed `lww-test` and `mv-test`
 
 ## How to test
+
+### Docker settings
+
+You will probably need to increase the amount of memory that you make available to Docker in order to run these tests with Docker. We have had success using 8GB of memory and 2GB of swap. More, if you can spare it, is probably better.
+
 ### Start the Docker Container
 
-- Add the following line to the Docker file of a node
-  - Because C* needs Java 8
-
-```diff
---- a/docker/node/Dockerfile-ubuntu
-+++ b/docker/node/Dockerfile-ubuntu
-@@ -7,4 +7,5 @@ RUN apt-get install -y openssh-server \
-     curl faketime iproute2 iptables iputils-ping libzip4 \
-     logrotate man man-db net-tools ntpdate psmisc python rsyslog \
-     sudo unzip vim wget apt-transport-https \
-+    && apt-get update && apt-get install -y openjdk-8-jre \
-     && apt-get remove -y --purge --auto-remove systemd
-```
-
-- Run docker
+- Fire up docker
 ```sh
 cd ${JEPSEN}/docker
-./up.sh --ubuntu
+./up.sh
 ```
 
 ### Install Cassaforte
+
 - Get and install `Cassaforte` which has been modified for the new Cassandra driver
   - Modified converter in `src/clojure/clojurewerkz/cassaforte/conversion.clj`
   - Modified option methods in `src/clojure/clojurewerkz/cassaforte/query.clj`
@@ -47,4 +39,4 @@ lein install
 
 `lein run test --test lwt --nemesis bridge --join bootstrap`
 
-- See `lein run test --help` for full options
+See `lein run test --help` for full options
