@@ -1,34 +1,36 @@
 (ns cassandra.core
-  (:require [clojure [pprint :refer :all]
-             [string :as str]]
-            [clojure.java.io :as io]
-            [clojure.java.jmx :as jmx]
+  (:require [clojure.java.jmx :as jmx]
             [clojure.set :as set]
             [clojure.tools.logging :refer [debug info warn]]
-            [jepsen [core      :as jepsen]
-             [db        :as db]
-             [util      :as util :refer [meh timeout]]
-             [control   :as c :refer [| lit]]
-             [client    :as client]
-             [checker   :as checker]
+            [jepsen
+             [core :as jepsen]
+             [db :as db]
+             [util :as util :refer [meh timeout]]
+             [control :as c :refer [| lit]]
+             [client :as client]
+             [checker :as checker]
              [generator :as gen]
-             [nemesis   :as nemesis]
-             [store     :as store]
-             [report    :as report]
-             [tests     :as tests]]
+             [nemesis :as nemesis]
+             [store :as store]
+             [report :as report]
+             [tests :as tests]]
             [jepsen.checker.timeline :as timeline]
             [jepsen.control [net :as cn]
              [util :as cu]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
-            [clojurewerkz.cassaforte.metadata :as metadata]
-            [clojurewerkz.cassaforte.client :as cassandra]
-            [clojurewerkz.cassaforte.query :refer :all]
-            [clojurewerkz.cassaforte.policies :refer :all]
-            [clojurewerkz.cassaforte.cql :as cql])
+            [qbits.alia :as alia]
+            [qbits.hayt]
+            [qbits.hayt.dsl.clause :refer :all]
+            [qbits.hayt.dsl.statement :refer :all])
   (:import (clojure.lang ExceptionInfo)
            (com.datastax.driver.core ConsistencyLevel)
+           (com.datastax.driver.core Session)
+           (com.datastax.driver.core Cluster)
+           (com.datastax.driver.core Metadata)
+           (com.datastax.driver.core Host)
            (com.datastax.driver.core.schemabuilder SchemaBuilder)
+           (com.datastax.driver.core.schemabuilder TableOptions)
            (com.datastax.driver.core.policies RetryPolicy
                                               RetryPolicy$RetryDecision)
            (java.net InetAddress)))
@@ -71,13 +73,18 @@
 
 (defn wait-for-recovery
   "Waits for the driver to report all nodes are up"
-  [timeout-secs conn]
+  [timeout-secs ^Session conn]
   (timeout (* 1000 timeout-secs)
            (throw (RuntimeException.
-                   (str "Driver didn't report all nodes were up in "
-                        timeout-secs "s - failing")))
-           (while (->> (metadata/hosts conn)
-                       (map :is-up) and not)
+                    (str "Driver didn't report all nodes were up in "
+                         timeout-secs "s - failing")))
+           (while (->> conn
+                       .getCluster
+                       .getMetadata
+                       .getAllHosts
+                       (map #(.isUp %))
+                       and
+                       not)
              (Thread/sleep 500))))
 
 (defn dns-resolve
@@ -93,33 +100,35 @@
     (set (map (fn [addr]
                 (->> (.indexOf ordered addr)
                      (get names)))
-               addrs))))
+              addrs))))
 
 (defn live-nodes
   "Get the list of live nodes from a random node in the cluster"
   [test]
   (->> (some (fn [node]
-               (try (jmx/with-connection {:host (name node) :port 7199}
-                      (jmx/read "org.apache.cassandra.db:type=StorageService"
-                                :LiveNodes))
-                      (catch Exception e
-                        (info "Couldn't get status from node" node))))
-               (-> test
-                   :nodes
-                   set
-                   (set/difference @(:decommissioned test))
-                   shuffle))
-    (dns-hostnames test)))
+               (try
+                 (jmx/with-connection {:host (name node) :port 7199}
+                                      (jmx/read "org.apache.cassandra.db:type=StorageService"
+                                                :LiveNodes))
+                 (catch Exception e
+                   (info "Couldn't get status from node" node))))
+             (-> test
+                 :nodes
+                 set
+                 (set/difference @(:decommissioned test))
+                 shuffle))
+       (dns-hostnames test)))
 
 (defn joining-nodes
   "Get the list of joining nodes from a random node in the cluster"
   [test]
   (set (mapcat (fn [node]
-                 (try (jmx/with-connection {:host (name node) :port 7199}
-                        (jmx/read "org.apache.cassandra.db:type=StorageService"
-                                  :JoiningNodes))
-                      (catch Exception e
-                        (info "Couldn't get status from node" node))))
+                 (try
+                   (jmx/with-connection {:host (name node) :port 7199}
+                                        (jmx/read "org.apache.cassandra.db:type=StorageService"
+                                                  :JoiningNodes))
+                   (catch Exception e
+                     (info "Couldn't get status from node" node))))
                (-> test
                    :nodes
                    set
@@ -156,51 +165,54 @@
 (defn install!
   "Installs Cassandra on the given node."
   [node test]
-  (let [url        (:tarball test)
+  (let [url (:tarball test)
         local-file (second (re-find #"file://(.+)" url))
-        tpath      (if local-file "file:///tmp/cassandra.tar.gz" url)]
+        tpath (if local-file "file:///tmp/cassandra.tar.gz" url)]
     (c/su (debian/install [:openjdk-8-jre]))
     (info node "installing Cassandra from" url)
     (do (when local-file
           (c/upload local-file "/tmp/cassandra.tar.gz"))
-      (cu/install-archive! tpath "/root/cassandra"))))
+        (cu/install-archive! tpath "/root/cassandra"))))
 
 (defn configure!
   "Uploads configuration files to the given node."
   [node test]
   (info node "configuring Cassandra")
   (c/su
-   (doseq [rep ["\"s/#MAX_HEAP_SIZE=.*/MAX_HEAP_SIZE='1G'/g\""
-                "\"s/#HEAP_NEWSIZE=.*/HEAP_NEWSIZE='256M'/g\""
-                "\"s/LOCAL_JMX=yes/LOCAL_JMX=no/g\""
-                (str "'s/# JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname="
-                     "<public name>\"/JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname=" (name node) "\"/g'")
-                (str "'s/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management.jmxremote"
-                     ".authenticate=true\"/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management"
-                     ".jmxremote.authenticate=false\"/g'")
-                "'/JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog=.*\"/d'"]]
-     (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra-env.sh"))
-   (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
-                      (str "\"s/- seeds: .*/- seeds: '"
-                           (first (:nodes test)) ","
-                           (second (:nodes test)) "'/g\"")
-                      (str "\"s/listen_address: .*/listen_address: " (cn/ip node) "/g\"")
-                      (str "\"s/rpc_address: .*/rpc_address: " (cn/ip node) "/g\"")
-                      (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: " (disable-hints?) "/g\"")
-                      "\"s/commitlog_sync: .*/commitlog_sync: batch/g\""
-                      (str "\"s/# commitlog_sync_batch_window_in_ms: .*/"
-                           "commitlog_sync_batch_window_in_ms: 1.0/g\"")
-                      "\"s/commitlog_sync_period_in_ms: .*/#/g\""
-                      (str "\"s/# phi_convict_threshold: .*/phi_convict_threshold: " (phi-level) "/g\"")]
-                     (when (compressed-commitlog?)
-                       ["\"s/#commitlog_compression.*/commitlog_compression:/g\""
-                        (str "\"s/#   - class_name: LZ4Compressor/"
-                             "    - class_name: LZ4Compressor/g\"")]))]
-     (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra.yaml"))
-   (c/exec :echo (str "JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog="
-                      (coordinator-batchlog-disabled?) "\"")
-           :>> "/root/cassandra/conf/cassandra-env.sh")
-   (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "/root/cassandra/conf/logback.xml")))
+    (doseq [rep ["\"s/#MAX_HEAP_SIZE=.*/MAX_HEAP_SIZE='1G'/g\"" ; docker memory should be set to around 8G or more
+                 "\"s/#HEAP_NEWSIZE=.*/HEAP_NEWSIZE='256M'/g\""
+                 "\"s/LOCAL_JMX=yes/LOCAL_JMX=no/g\""
+                 (str "'s/# JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname="
+                      "<public name>\"/JVM_OPTS=\"$JVM_OPTS -Djava.rmi.server.hostname="
+                      (name node) "\"/g'")
+                 (str "'s/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management.jmxremote"
+                      ".authenticate=true\"/JVM_OPTS=\"$JVM_OPTS -Dcom.sun.management"
+                      ".jmxremote.authenticate=false\"/g'")
+                 "'/JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog=.*\"/d'"]]
+      (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra-env.sh"))
+    (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
+                       (str "\"s/seeds: .*/seeds: '"
+                            (first (:nodes test)) ","
+                            (second (:nodes test)) "'/g\"")
+                       (str "\"s/listen_address: .*/listen_address: " (cn/ip node) "/g\"")
+                       (str "\"s/rpc_address: .*/rpc_address: " (cn/ip node) "/g\"")
+                       (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: " (disable-hints?) "/g\"")
+                       "\"s/commitlog_sync: .*/commitlog_sync: batch/g\""
+                       (str "\"s/# commitlog_sync_batch_window_in_ms: .*/"
+                            "commitlog_sync_batch_window_in_ms: 1.0/g\"")
+                       "\"s/commitlog_sync_period_in_ms: .*/#/g\""
+                       (str "\"s/# phi_convict_threshold: .*/phi_convict_threshold: " (phi-level)
+                            "/g\"")
+                       "\"/auto_bootstrap: .*/d\""]
+                      (when (compressed-commitlog?)
+                        ["\"s/#commitlog_compression.*/commitlog_compression:/g\""
+                         (str "\"s/#   - class_name: LZ4Compressor/"
+                              "    - class_name: LZ4Compressor/g\"")]))]
+      (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra.yaml"))
+    (c/exec :echo (str "JVM_OPTS=\"$JVM_OPTS -Dcassandra.mv_disable_coordinator_batchlog="
+                       (coordinator-batchlog-disabled?) "\"")
+            :>> "/root/cassandra/conf/cassandra-env.sh")
+    (c/exec :sed :-i (lit "\"s/INFO/DEBUG/g\"") "/root/cassandra/conf/logback.xml")))
 
 (defn start!
   "Starts Cassandra."
@@ -223,9 +235,9 @@
   [node]
   (info node "stopping Cassandra")
   (c/su
-   (meh (c/exec :killall :java))
-   (while (.contains (c/exec :ps :-ef) "java")
-     (Thread/sleep 100)))
+    (meh (c/exec :killall :java))
+    (while (.contains (c/exec :ps :-ef) "java")
+      (Thread/sleep 100)))
   (info node "has stopped Cassandra"))
 
 (defn wipe!
@@ -234,11 +246,11 @@
   (stop! node)
   (info node "deleting data files")
   (c/su
-   (meh (c/exec :rm :-r "/root/cassandra/logs"))
-   (meh (c/exec :rm :-r "/root/cassandra/data/data"))
-   (meh (c/exec :rm :-r "/root/cassandra/data/hints"))
-   (meh (c/exec :rm :-r "/root/cassandra/data/commitlog"))
-   (meh (c/exec :rm :-r "/root/cassandra/data/saved_caches"))))
+    (meh (c/exec :rm :-r "/root/cassandra/logs"))
+    (meh (c/exec :rm :-r "/root/cassandra/data/data"))
+    (meh (c/exec :rm :-r "/root/cassandra/data/hints"))
+    (meh (c/exec :rm :-r "/root/cassandra/data/commitlog"))
+    (meh (c/exec :rm :-r "/root/cassandra/data/saved_caches"))))
 
 (defn wait-turn
   "A node has to wait because Cassandra node can't start when another node is bootstrapping"
@@ -263,7 +275,7 @@
 
     (teardown! [_ test node]
       (when-not (seq (System/getenv "LEAVE_CLUSTER_RUNNING"))
-          (wipe! node)))
+        (wipe! node)))
 
     db/LogFiles
     (log-files [db test node]
@@ -295,7 +307,7 @@
   "A generator which reads exactly once."
   []
   (gen/clients
-   (gen/once r)))
+    (gen/once r)))
 
 (defn cassandra-test
   [name opts]

@@ -1,104 +1,67 @@
 (ns cassandra.counter
-  (:require [clojure [pprint :refer :all]
-             [string :as str]]
-            [clojure.java.io :as io]
-            [clojure.tools.logging :refer [debug info warn]]
-            [jepsen [core      :as jepsen]
-             [db        :as db]
-             [util      :as util :refer [meh timeout]]
-             [control   :as c :refer [| lit]]
-             [client    :as client]
-             [checker   :as checker]
-             [generator :as gen]
-             [nemesis   :as nemesis]
-             [store     :as store]
-             [report    :as report]
-             [tests     :as tests]]
-            [jepsen.checker.timeline :as timeline]
-            [jepsen.control [net :as net]
-             [util :as net/util]]
-            [knossos.core :as knossos]
-            [clojurewerkz.cassaforte.client :as cassandra]
-            [clojurewerkz.cassaforte.query :refer :all]
-            [clojurewerkz.cassaforte.policies :refer :all]
-            [clojurewerkz.cassaforte.cql :as cql]
+  (:require [cassandra.conductors :as conductors]
             [cassandra.core :refer :all]
-            [cassandra.conductors :as conductors])
+            [clojure.tools.logging :refer [debug info warn]]
+            [jepsen
+             [client :as client]
+             [checker :as checker]]
+            [qbits.alia :as alia]
+            [qbits.hayt]
+            [qbits.hayt.dsl.clause :refer :all]
+            [qbits.hayt.dsl.statement :refer :all])
   (:import (clojure.lang ExceptionInfo)
-           (com.datastax.driver.core ConsistencyLevel)
-           (com.datastax.driver.core.exceptions UnavailableException
-                                                WriteTimeoutException
-                                                ReadTimeoutException
-                                                NoHostAvailableException)
            (com.datastax.driver.core.policies FallthroughRetryPolicy)))
 
 (defrecord CQLCounterClient [tbl-created? conn writec]
   client/Client
-  (open! [_ test _]
-    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [this test _]
+    (let [cluster (alia/cluster {:contact-points (map name (:nodes test))})
+          conn (alia/connect cluster)]
       (CQLCounterClient. tbl-created? conn writec)))
 
-  (setup! [this test]
+  (setup! [_ test]
     (locking tbl-created?
       (when (compare-and-set! tbl-created? false true)
-        (cql/create-keyspace conn "jepsen_keyspace"
-                             (if-not-exists)
-                             (with {:replication
-                                    {"class" "SimpleStrategy"
-                                     "replication_factor" (:rf test)}}))
-        (cql/use-keyspace conn "jepsen_keyspace")
-        (cql/create-table conn "counters"
-                          (if-not-exists)
-                          (column-definitions {:id :int
-                                               :count :counter
-                                               :primary-key [:id]}))
-        ; @TODO change compaction storategy
-        (cql/alter-table conn "counters"
-                          (with {:compaction-options (compaction-strategy)}))
-        (cql/update conn "counters" {:count (increment-by 0)}
-                    (where [[= :id 0]])))))
+        (alia/execute conn (create-keyspace :jepsen_keyspace
+                                            (if-exists false)
+                                            (with {:replication {"class"              "SimpleStrategy"
+                                                                 "replication_factor" (:rf test)}})))
+        (alia/execute conn (use-keyspace :jepsen_keyspace))
+        (alia/execute conn (create-table :counters
+                                         (if-exists false)
+                                         (column-definitions {:id          :int
+                                                              :count       :counter
+                                                              :primary-key [:id]})))
+        (alia/execute conn (alter-table :counters (with {:compaction {:class :SizeTieredCompactionStrategy}})))
+        (alia/execute conn (update :counters
+                                   (set-columns :count [+ 0])
+                                   (where [[= :id 0]]))))))
 
   (invoke! [this test op]
-    (cql/use-keyspace conn "jepsen_keyspace")
-    (case (:f op)
-      :add (try (let [value (:value op)
-                      added (if (pos? value) (str "+" value) (str value))]
-                  (cassandra/execute
-                    conn
-                    (str "UPDATE counters SET count = "
-                         "count " added " WHERE id = 0;")
-                    :consistency-level (consistency-level writec)
-                    :retry-policy FallthroughRetryPolicy/INSTANCE))
-                  (assoc op :type :ok)
-                (catch UnavailableException e
-                  (assoc op :type :fail :error (.getMessage e)))
-                (catch WriteTimeoutException e
-                  (assoc op :type :fail :error :timed-out))
-                (catch NoHostAvailableException e
-                  (info "All the servers are down - waiting 2s")
-                  (Thread/sleep 2000)
-                  (assoc op :type :fail :error (.getMessage e))))
-      :read (try (let [value (->> (cassandra/execute
-                                    conn
-                                    "SELECT * from counters WHERE id = 0;"
-                                    :consistency-level (consistency-level :all)
-                                    :retry-policy FallthroughRetryPolicy/INSTANCE)
-                                  first
-                                  :count)]
-                   (assoc op :type :ok :value value))
-                 (catch UnavailableException e
-                   (info "Not enough replicas - failing")
-                   (assoc op :type :fail :error (.getMessage e)))
-                 (catch ReadTimeoutException e
-                   (assoc op :type :fail :error :timed-out))
-                 (catch NoHostAvailableException e
-                   (info "All the servers are down - waiting 2s")
-                   (Thread/sleep 2000)
-                   (assoc op :type :fail :error (.getMessage e))))))
+    (try
+      (alia/execute conn (use-keyspace :jepsen_keyspace))
+      (case (:f op)
+        :add (do (alia/execute conn
+                               (update :counters
+                                       (set-columns :count [+ (:value op)])
+                                       (where [[= :id 0]]))
+                               {:consistency  writec
+                                :retry-policy FallthroughRetryPolicy/INSTANCE})
+                 (assoc op :type :ok))
+        :read (let [value (->> (alia/execute conn
+                                             (select :counters (where [[= :id 0]]))
+                                             {:consistency  :all
+                                              :retry-policy FallthroughRetryPolicy/INSTANCE})
+                               first
+                               :count)]
+                (assoc op :type :ok, :value value)))
+
+      (catch ExceptionInfo e
+        (assoc op :type :fail, :error (.getMessage e)))))
 
   (close! [_ _]
     (info "Closing client with conn" conn)
-    (cassandra/disconnect! conn))
+    (alia/shutdown conn))
 
   (teardown! [_ _]))
 
@@ -109,24 +72,10 @@
 
 (defn cnt-inc-test
   [opts]
-  (merge (cassandra-test (str "counter-inc-"  (:suffix opts))
-                         {:client (cql-counter-client)
+  (merge (cassandra-test (str "counter-inc-" (:suffix opts))
+                         {:client    (cql-counter-client)
+                          :checker   (checker/counter)
                           :generator (->> (repeat 100 add)
                                           (cons r)
-                                          (conductors/std-gen opts))
-                          :checker (checker/compose
-                                    {:counter (checker/counter)})})
+                                          (conductors/std-gen opts))})
          opts))
-
-;; TODO: check sub operations
-;(defn cnt-inc-dec-test
-;  [opts]
-;  (merge (cassandra-test (str "counter-inc-dec-" (:suffix opts))
-;                         {:client (cql-counter-client)
-;                          :model nil
-;                          :generator (->> (take 100 (cycle [add sub]))
-;                                          (cons r)
-;                                          (conductors/std-gen opts))
-;                          :checker (checker/compose
-;                                    {:counter (checker/counter)})})
-;         opts))
