@@ -111,5 +111,6 @@
 
 (defn -main
   [& args]
-  (cli/run! (test-cmd)
+  (cli/run! (merge (cli/serve-cmd)
+                   (test-cmd))
             args))

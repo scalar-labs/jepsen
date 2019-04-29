@@ -13,9 +13,9 @@
             [qbits.hayt.dsl.statement :refer :all])
   (:import (clojure.lang ExceptionInfo)))
 
-(def ak (keyword "[applied]"))          ; this is the name C* returns, define now because
-; it isn't really a valid keyword from reader's
-; perspective
+(def ak (keyword "[applied]"))  ; this is the name C* returns, define now because
+                                ; it isn't really a valid keyword from reader's
+                                ; perspective
 
 (defrecord CasRegisterClient [tbl-created? conn]
   client/Client
