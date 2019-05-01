@@ -12,7 +12,11 @@
             [qbits.hayt.utils :refer [map-type]]
             [cassandra.core :refer :all]
             [cassandra.conductors :as conductors])
-  (:import (clojure.lang ExceptionInfo)))
+  (:import (clojure.lang ExceptionInfo)
+           (com.datastax.driver.core.exceptions NoHostAvailableException
+                                                ReadTimeoutException
+                                                WriteTimeoutException
+                                                UnavailableException)))
 
 (defrecord CQLMapClient [tbl-created? conn writec]
   client/Client
@@ -60,7 +64,15 @@
                     (assoc op :type :ok, :value value))))
 
       (catch ExceptionInfo e
-        (assoc op :type :fail, :error (.getMessage e)))))
+        (let [e (class (:exception (ex-data e)))]
+          (cond
+            (= e ReadTimeoutException) (assoc op :type :fail, :error :read-timed-out)
+            (= e WriteTimeoutException) (assoc op :type :fail, :error :write-timed-out)
+            (= e UnavailableException) (assoc op :type :fail, :error :unavailable)
+            (= e NoHostAvailableException) (do
+                                             (info "All the servers are down - waiting 2s")
+                                             (Thread/sleep 2000)
+                                             (assoc op :type :fail, :error :no-host-available)))))))
 
   (close! [_ _]
     (info "Closing client with conn" conn)
