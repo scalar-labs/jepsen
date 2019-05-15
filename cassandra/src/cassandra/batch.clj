@@ -72,14 +72,14 @@
 
       (catch ExceptionInfo e
         (let [e (class (:exception (ex-data e)))]
-          (cond
-            (= e ReadTimeoutException) (assoc op :type :fail, :error :read-timed-out)
-            (= e WriteTimeoutException) (assoc op :type :fail, :error :write-timed-out)
-            (= e UnavailableException) (assoc op :type :fail, :error :unavailable)
-            (= e NoHostAvailableException) (do
-                                             (info "All the servers are down - waiting 2s")
-                                             (Thread/sleep 2000)
-                                             (assoc op :type :fail, :error :no-host-available)))))))
+          (condp = e
+            ReadTimeoutException (assoc op :type :fail, :error :read-timed-out)
+            WriteTimeoutException (assoc op :type :fail, :error :write-timed-out)
+            UnavailableException (assoc op :type :fail, :error :unavailable)
+            NoHostAvailableException (do
+                                       (info "All the servers are down - waiting 2s")
+                                       (Thread/sleep 2000)
+                                       (assoc op :type :fail, :error :no-host-available)))))))
 
   (close! [_ _]
     (info "Closing client conn" conn)
