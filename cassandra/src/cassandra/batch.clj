@@ -41,8 +41,8 @@
         (alia/execute conn (alter-table :bat (with {:compaction {:class :SizeTieredCompactionStrategy}}))))))
 
   (invoke! [this test op]
+    (alia/execute conn (use-keyspace :jepsen_keyspace))
     (try
-      (alia/execute conn (use-keyspace :jepsen_keyspace))
       (case (:f op)
         :add (let [value (:value op)]
                (alia/execute conn
@@ -73,8 +73,8 @@
       (catch ExceptionInfo e
         (let [e (class (:exception (ex-data e)))]
           (condp = e
+            WriteTimeoutException (assoc op :type :info, :value :write-timed-out)
             ReadTimeoutException (assoc op :type :fail, :error :read-timed-out)
-            WriteTimeoutException (assoc op :type :fail, :error :write-timed-out)
             UnavailableException (assoc op :type :fail, :error :unavailable)
             NoHostAvailableException (do
                                        (info "All the servers are down - waiting 2s")

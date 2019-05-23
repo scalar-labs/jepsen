@@ -15,7 +15,8 @@
              [report :as report]
              [tests :as tests]]
             [jepsen.checker.timeline :as timeline]
-            [jepsen.control [net :as cn]
+            [jepsen.control
+             [net :as cn]
              [util :as cu]]
             [jepsen.os.debian :as debian]
             [knossos.core :as knossos]
@@ -281,11 +282,11 @@
     (log-files [db test node]
       ["/root/cassandra/logs/system.log"])))
 
-(def add {:type :invoke :f :add :value 1})
-(def sub {:type :invoke :f :add :value -1})
-(def r {:type :invoke :f :read})
-(defn w [_ _] {:type :invoke :f :write :value (rand-int 5)})
-(defn cas [_ _] {:type :invoke :f :cas :value [(rand-int 5) (rand-int 5)]})
+(def add {:type :invoke, :f :add, :value 1})
+(def sub {:type :invoke, :f :add, :value -1})
+(def r {:type :invoke, :f :read})
+(defn w [_ _] {:type :invoke, :f :write, :value (rand-int 5)})
+(defn cas [_ _] {:type :invoke, :f :cas, :value [(rand-int 5) (rand-int 5)]})
 
 (defn adds
   "Generator that emits :add operations for sequential integers."
