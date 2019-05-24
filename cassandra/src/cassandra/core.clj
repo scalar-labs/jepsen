@@ -136,6 +136,13 @@
                    (set/difference @(:decommissioned test))
                    shuffle))))
 
+(defn seed-nodes
+  "Get a list of seed nodes"
+  [test]
+  (if (= (:rf test) 1)
+    (first (:nodes test))
+    (take (dec (:rf test)) (:nodes test))))
+
 (defn nodetool
   "Run a nodetool command"
   [node & args]
@@ -193,8 +200,7 @@
       (c/exec :sed :-i (lit rep) "/root/cassandra/conf/cassandra-env.sh"))
     (doseq [rep (into ["\"s/cluster_name: .*/cluster_name: 'jepsen'/g\""
                        (str "\"s/seeds: .*/seeds: '"
-                            (first (:nodes test)) ","
-                            (second (:nodes test)) "'/g\"")
+                            (clojure.string/join "," (seed-nodes test)) "'/g\"")
                        (str "\"s/listen_address: .*/listen_address: " (cn/ip node) "/g\"")
                        (str "\"s/rpc_address: .*/rpc_address: " (cn/ip node) "/g\"")
                        (str "\"s/hinted_handoff_enabled:.*/hinted_handoff_enabled: " (disable-hints?) "/g\"")
@@ -256,10 +262,12 @@
 (defn wait-turn
   "A node has to wait because Cassandra node can't start when another node is bootstrapping"
   [node test]
-  (let [nodes (:nodes test)
+  (let [decommissioned (:decommissioned test)
+        nodes (:nodes test)
         indexed-nodes (zipmap nodes (range (count nodes)))
         idx (indexed-nodes node)]
-    (Thread/sleep (* 1000 60 idx))))
+    (when-not (@decommissioned node)
+      (Thread/sleep (* 1000 60 idx)))))
 
 (defn db
   "Cassandra for a particular version."

@@ -60,8 +60,12 @@
                               (str "nemesis already disrupting " @nodes))
                             :no-target)
                    :stop (if-let [ns @nodes]
-                           (let [restarted (for [node ns] (c/on node (stop! test node)))]
-                            (reset! nodes nil)
+                           (let [all-nodes (:nodes test)
+                                 seed (first (cass/seed-nodes test))
+                                 all-crashed? (= (count ns) (count all-nodes))
+                                 reordered (if all-crashed? (conj (remove #(= seed %) ns) seed) ns)
+                                 restarted (for [node reordered] (c/on node (stop! test node)))]
+                             (reset! nodes nil)
                              restarted)
                            :not-started)))))
 
