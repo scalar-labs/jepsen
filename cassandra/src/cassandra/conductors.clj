@@ -2,7 +2,7 @@
   (:require [cassandra.core :as cassandra]
             [clojure.set :as set]
             [clojure.tools.logging :refer :all]
-            [jepsen [client :as client]
+            [jepsen
              [control :as c]
              [generator :as gen]
              [nemesis :as nemesis]]

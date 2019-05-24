@@ -1,8 +1,6 @@
 (ns cassandra.checker
   (require [clojure.core.reducers :as r]
            [clojure.tools.logging :refer [debug info warn]]
-           [jepsen.model :as model]
-           [jepsen.checker.perf :as latency]
            [knossos.core :as knossos])
   (:import jepsen.checker.Checker))
 

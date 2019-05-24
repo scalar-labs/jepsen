@@ -21,20 +21,6 @@ cd ${JEPSEN}/docker
 ./up.sh
 ```
 
-### Install Cassaforte
-
-- Get and install `Cassaforte` which has been modified for the new Cassandra driver
-  - Modified converter in `src/clojure/clojurewerkz/cassaforte/conversion.clj`
-  - Modified option methods in `src/clojure/clojurewerkz/cassaforte/query.clj`
-
-```sh
-# In jepsen-control
-cd ${WORKSPACE}
-git clone -b driver-3.0-for-jepsen https://github.com/scalar-labs/cassaforte
-cd cassaforte
-lein install
-```
-
 ### Run tests
 
 `lein run test --test lwt --nemesis bridge --join bootstrap`

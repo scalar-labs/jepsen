@@ -1,101 +1,82 @@
 (ns cassandra.collections.map
-  (:require [clojure [pprint :refer :all]
-             [string :as str]]
-            [clojure.java.io :as io]
-            [clojure.tools.logging :refer [debug info warn]]
-            [jepsen [core      :as jepsen]
-             [db        :as db]
-             [util      :as util :refer [meh timeout]]
-             [control   :as c :refer [| lit]]
-             [client    :as client]
-             [checker   :as checker]
-             [generator :as gen]
-             [nemesis   :as nemesis]
-             [store     :as store]
-             [report    :as report]
-             [tests     :as tests]]
-            [jepsen.checker.timeline :as timeline]
-            [jepsen.control [net :as net]
-             [util :as net/util]]
-            [knossos.core :as knossos]
+  (:require [clojure.tools.logging :refer [debug info warn]]
+            [jepsen
+             [client :as client]
+             [checker :as checker]
+             [generator :as gen]]
             [knossos.model :as model]
-            [clojurewerkz.cassaforte.client :as cassandra]
-            [clojurewerkz.cassaforte.query :refer :all]
-            [clojurewerkz.cassaforte.policies :refer :all]
-            [clojurewerkz.cassaforte.cql :as cql]
+            [qbits.alia :as alia]
+            [qbits.hayt]
+            [qbits.hayt.dsl.clause :refer :all]
+            [qbits.hayt.dsl.statement :refer :all]
+            [qbits.hayt.utils :refer [map-type]]
             [cassandra.core :refer :all]
             [cassandra.conductors :as conductors])
   (:import (clojure.lang ExceptionInfo)
-           (com.datastax.driver.core.exceptions UnavailableException
-                                                WriteTimeoutException
+           (com.datastax.driver.core.exceptions NoHostAvailableException
                                                 ReadTimeoutException
-                                                NoHostAvailableException)))
+                                                WriteTimeoutException
+                                                UnavailableException)))
 
 (defrecord CQLMapClient [tbl-created? conn writec]
   client/Client
-  (open! [_ test _]
-    (let [conn (cassandra/connect (->> test :nodes (map name)))]
+  (open! [this test _]
+    (let [cluster (alia/cluster {:contact-points (map name (:nodes test))})
+          conn (alia/connect cluster)]
       (CQLMapClient. tbl-created? conn writec)))
 
-  (setup! [this test]
+  (setup! [_ test]
     (locking tbl-created?
       (when (compare-and-set! tbl-created? false true)
-        (cql/create-keyspace conn "jepsen_keyspace"
-                             (if-not-exists)
-                             (with {:replication
-                                    {"class" "SimpleStrategy"
-                                     "replication_factor" (:rf test)}}))
-        (cql/use-keyspace conn "jepsen_keyspace")
-        (cql/create-table conn "maps"
-                          (if-not-exists)
-                          (column-definitions {:id :int
-                                               :elements (map-type :int :int)
-                                               :primary-key [:id]}))
-        ; @TODO change compaction storategy
-        (cql/alter-table conn "maps"
-                         (with {:compaction-options (compaction-strategy)}))
-        (cql/insert conn "maps"
-                    {:id 0
-                     :elements {}}))))
+        (alia/execute conn (create-keyspace :jepsen_keyspace
+                                            (if-exists false)
+                                            (with {:replication {"class"              "SimpleStrategy"
+                                                                 "replication_factor" (:rf test)}})))
+        (alia/execute conn (use-keyspace :jepsen_keyspace))
+        (alia/execute conn (create-table :maps
+                                         (if-exists false)
+                                         (column-definitions {:id          :int
+                                                              :elements    (map-type :int :int)
+                                                              :primary-key [:id]})))
+        (alia/execute conn (alter-table :maps (with {:compaction {:class :SizeTieredCompactionStrategy}})))
+        (alia/execute conn (insert :maps (values [[:id 0]
+                                                  [:elements {}]]))))))
 
   (invoke! [this test op]
-    (cql/use-keyspace conn "jepsen_keyspace")
-    (case (:f op)
-      :add (try (cassandra/execute
-                  conn
-                  (str "UPDATE maps SET elements = elements + {"
-                       (:value op) " : " (:value op)
-                       "} WHERE id = 0;")
-                  :consistency-level (consistency-level writec))
-                (assoc op :type :ok)
-                (catch UnavailableException e
-                  (assoc op :type :fail :value (.getMessage e)))
-                (catch WriteTimeoutException e
-                  (assoc op :type :info :value :timed-out))
-                (catch NoHostAvailableException e
-                  (info "All nodes are down - sleeping 2s")
-                  (Thread/sleep 2000)
-                  (assoc op :type :fail :value (.getMessage e))))
-      :read (try (wait-for-recovery 30 conn)
-                 (let [value (->> (cassandra/execute
-                                    conn
-                                    "SELECT * from maps WHERE id = 0;"
-                                    :consistency-level (consistency-level :all)
-                                    :retry-policy aggressive-read)
-                                  first
-                                  :elements
-                                  vals
-                                  (into (sorted-set)))]
-                   (assoc op :type :ok :value value))
-                 (catch UnavailableException e
-                   (info "Not enough replicas - failing")
-                   (assoc op :type :fail :value (.getMessage e)))
-                 (catch ReadTimeoutException e
-                   (assoc op :type :fail :value :timed-out)))))
+    (alia/execute conn (use-keyspace :jepsen_keyspace))
+    (try
+      (case (:f op)
+        :add (do (alia/execute conn
+                               (update :maps
+                                       (set-columns {:elements [+ {(:value op) (:value op)}]})
+                                       (where [[= :id 0]]))
+                               {:consistency-level writec})
+                 (assoc op :type :ok))
+        :read (do (wait-for-recovery 30 conn)
+                  (let [value (->> (alia/execute conn
+                                                 (select :maps (where [[= :id 0]]))
+                                                 {:consistency  :all
+                                                  :retry-policy aggressive-read})
+                                   first
+                                   :elements
+                                   vals
+                                   (into (sorted-set)))]
+                    (assoc op :type :ok, :value value))))
+
+      (catch ExceptionInfo e
+        (let [e (class (:exception (ex-data e)))]
+          (condp = e
+            WriteTimeoutException (assoc op :type :info, :value :write-timed-out)
+            ReadTimeoutException (assoc op :type :fail, :error :read-timed-out)
+            UnavailableException (assoc op :type :fail, :error :unavailable)
+            NoHostAvailableException (do
+                                       (info "All the servers are down - waiting 2s")
+                                       (Thread/sleep 2000)
+                                       (assoc op :type :fail, :error :no-host-available)))))))
 
   (close! [_ _]
     (info "Closing client with conn" conn)
-    (cassandra/disconnect! conn))
+    (alia/shutdown conn))
 
   (teardown! [_ _]))
 
@@ -107,12 +88,11 @@
 (defn map-test
   [opts]
   (merge (cassandra-test (str "map-" (:suffix opts))
-                         {:client (cql-map-client)
-                          :model (model/set)
+                         {:client    (cql-map-client)
+                          :model     (model/set)
                           :generator (gen/phases
-                                      (->> [(adds)]
-                                           (conductors/std-gen opts))
-                                      (read-once))
-                          :checker (checker/compose
-                                    {:set (checker/set)})})
+                                       (->> [(adds)]
+                                            (conductors/std-gen opts))
+                                       (read-once))
+                          :checker   (checker/set)})
          opts))

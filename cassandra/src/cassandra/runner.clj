@@ -1,18 +1,22 @@
 (ns cassandra.runner
   (:gen-class)
-  (:require [jepsen
-             [core    :as jepsen]
-             [cli     :as jc]
-             [nemesis :as jn]]
-            [jepsen.nemesis.time :as nt]
+  (:require [cassandra
+             [batch      :as batch]
+             [conductors :as conductors]
+             [core       :as cassandra]
+             [counter    :as counter]
+             [lwt        :as lwt]
+             [nemesis    :as can]]
             [cassandra.collections.map :as map]
             [cassandra.collections.set :as set]
-            [cassandra [core       :as cassandra]
-                       [batch      :as batch]
-                       [counter    :as counter]
-                       [lwt        :as lwt]
-                       [conductors :as conductors]
-                       [nemesis    :as can]]))
+            [jepsen
+             [core    :as jepsen]
+             [cli     :as cli]
+             [nemesis :as jn]]
+            [jepsen.nemesis.time :as nt]))
+
+(def link-to-tarball "http://ftp.meisei-u.ac.jp/mirror/apache/dist/cassandra/3.11.4/apache-cassandra-3.11.4-bin.tar.gz")
+;(def link-to-tarball "http://www.us.apache.org/dist/cassandra/3.11.4/apache-cassandra-3.11.4-bin.tar.gz")
 
 (def tests
   "A map of test names to test constructors."
@@ -43,26 +47,26 @@
    "drift"  {:name "-clock-drift"  :bump true  :strobe true}})
 
 (def opt-spec
-  [(jc/repeated-opt nil "--test NAME" "Test(s) to run" [] tests)
+  [(cli/repeated-opt nil "--test NAME" "Test(s) to run" [] tests)
 
-   (jc/repeated-opt nil "--nemesis NAME" "Which nemeses to use"
-                    [`(can/none)]
-                    nemeses)
+   (cli/repeated-opt nil "--nemesis NAME" "Which nemeses to use"
+                     [`(can/none)]
+                     nemeses)
 
-   (jc/repeated-opt nil "--join NAME" "Which node joinings to use"
-                    [{:name "" :bootstrap false :decommission false}]
-                    joinings)
+   (cli/repeated-opt nil "--join NAME" "Which node joinings to use"
+                     [{:name "" :bootstrap false :decommission false}]
+                     joinings)
 
-   (jc/repeated-opt nil "--clock NAME" "Which clock-drift to use"
-                    [{:name "" :bump false :strobe false}]
-                    clocks)
+   (cli/repeated-opt nil "--clock NAME" "Which clock-drift to use"
+                     [{:name "" :bump false :strobe false}]
+                     clocks)
 
    [nil "--rf REPLICATION_FACTOR" "Replication factor"
     :default 3
     :parse-fn #(Long/parseLong %)
     :validate [pos? "Must be positive"]]
 
-   (jc/tarball-opt "http://www.us.apache.org/dist/cassandra/3.11.4/apache-cassandra-3.11.4-bin.tar.gz")])
+   (cli/tarball-opt link-to-tarball)])
 
 (defn combine-nemesis
   "Combine nemesis options with bootstrapper and decommissioner"
@@ -87,9 +91,9 @@
 
 (defn test-cmd
    []
-   {"test" {:opt-spec (into jc/test-opt-spec opt-spec)
-            :opt-fn (fn [parsed] (-> parsed jc/test-opt-fn))
-            :usage (jc/test-usage)
+   {"test" {:opt-spec (into cli/test-opt-spec opt-spec)
+            :opt-fn (fn [parsed] (-> parsed cli/test-opt-fn))
+            :usage (cli/test-usage)
             :run (fn [{:keys [options]}]
                    (doseq [i        (range (:test-count options))
                            test-fn  (:test options)
@@ -107,6 +111,6 @@
 
 (defn -main
   [& args]
-  (jc/run! (merge (jc/serve-cmd)
-                  (test-cmd))
-           args))
+  (cli/run! (merge (cli/serve-cmd)
+                   (test-cmd))
+            args))
