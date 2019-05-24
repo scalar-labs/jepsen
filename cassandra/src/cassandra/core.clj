@@ -261,10 +261,8 @@
 
 (defn wait-turn
   "A node has to wait because Cassandra node can't start when another node is bootstrapping"
-  [node test]
-  (let [decommissioned (:decommissioned test)
-        nodes (:nodes test)
-        indexed-nodes (zipmap nodes (range (count nodes)))
+  [node {:keys [decommissioned nodes]}]
+  (let [indexed-nodes (zipmap nodes (range (count nodes)))
         idx (indexed-nodes node)]
     (when-not (@decommissioned node)
       (Thread/sleep (* 1000 60 idx)))))
