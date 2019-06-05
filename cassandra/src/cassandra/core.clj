@@ -140,7 +140,7 @@
   "Get a list of seed nodes"
   [test]
   (if (= (:rf test) 1)
-    (first (:nodes test))
+    (take 1 (:nodes test))
     (take (dec (:rf test)) (:nodes test))))
 
 (defn nodetool
