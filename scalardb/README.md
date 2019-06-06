@@ -5,10 +5,10 @@ The Scalar DB test makes use of the [Cassandra Jepsen tests](https://github.com/
 
 ## How to run a test
 
-1. Clone the scalardb branch of this repository
+1. Clone the `scalar` branch of this repository
 
     ```
-    $ git clone -b scalardb https://github.com/scalar-labs/jepsen.git
+    $ git clone -b scalar https://github.com/scalar-labs/jepsen.git
     ```
 
 2. Start Jepsen with docker
