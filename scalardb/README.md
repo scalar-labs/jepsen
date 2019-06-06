@@ -50,4 +50,4 @@ The Scalar DB tests make use of the [Cassandra Jepsen tests](https://github.com/
     $ lein run test --test transfer --nemesis crash --join decommission --time-limit 300
     ```
 
-    Use `lein run test --help` to see a list of the full options
+    Use `lein run test --help` to see a list of the options.
