@@ -1,7 +1,7 @@
 # Jepsen tests for Scalar DB
 
 This guide will teach you how to run Jepsen tests for Scalar DB.
-The Scalar DB test makes use of the [Cassandra Jepsen tests](https://github.com/scalar-labs/jepsen/tree/cassandra).
+The Scalar DB tests make use of the [Cassandra Jepsen tests](https://github.com/scalar-labs/jepsen/tree/cassandra).
 
 ## How to run a test
 
@@ -41,7 +41,7 @@ The Scalar DB test makes use of the [Cassandra Jepsen tests](https://github.com/
     RUN cd /jepsen/cassandra && lein install
     ```
 
-4. Run a test of Scalar DB
+4. Run a Scalar DB Jepsen test
 
     ```
     # in jepsen-control
