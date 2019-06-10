@@ -9,7 +9,8 @@
            (com.scalar.client.service ClientModule)
            (com.google.inject Guice)
            (javax.json Json)
-           (java.io StringReader)))
+           (java.io StringReader)
+           (com.scalar.rpc ContractExecutionResponse)))
 
 (defn spinup-cassandra!
   [test node]
@@ -43,7 +44,7 @@
 
 (defn response->int
   "Returns the value from a ContractExecutionResponse if it exists, and nil otherwise."
-  [response]
+  [^ContractExecutionResponse response]
   (try
     (some-> response
             .getResult
@@ -51,7 +52,7 @@
             (Json/createReader)
             .readObject
             (.getInt "value"))
-    (catch Exception e
+    (catch Exception _
       nil)))
 
 (defn create-argument

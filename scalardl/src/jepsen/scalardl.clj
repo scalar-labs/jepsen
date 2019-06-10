@@ -16,7 +16,9 @@
             [knossos.model :as model]
             [knossos.op])
   (:import (com.scalar.client.service ClientService)
-           (java.util Optional)))
+           (java.util Optional)
+           (com.scalar.rpc ContractExecutionResponse)
+           (com.scalar.ledger.service StatusCode)))
 
 (defn parse-long
   [s]
@@ -60,11 +62,15 @@
     (let [[k v] (:value op)]
       (case (:f op)
         :read (let [argument (s/create-argument k)
-                    value (s/response->int (.executeContract conn "read" argument))]
-                (assoc op :type :ok, :value (independent/tuple k value)))
-        :write (let [argument (s/create-argument k v)]
-                 (.executeContract conn "write" argument)
-                 (assoc op :type :ok)))))
+                    response (.executeContract conn "read" argument)]
+                (if (= (.get StatusCode/OK) (.getStatus response))
+                  (assoc op :type :ok, :value (independent/tuple k (s/response->int response)))
+                  (assoc op :type :fail, :error (.getMessage response))))
+        :write (let [argument (s/create-argument k v)
+                     response (.executeContract conn "write" argument)]
+                 (if (= (.get StatusCode/OK) (.getStatus response))
+                   (assoc op :type :ok)
+                   (assoc op :type :fail, :error (.getMessage response)))))))
 
   (teardown! [_ test]))
 
