@@ -273,9 +273,7 @@
                           (into [])
                           count
                           (+ checked-committed))
-            expected-version (-> total-ok
-                                 (* 2)                       ; update 2 records per a transfer
-                                 (+ (-> test :model :num)))  ; initial insertions
+            expected-version 1
             bad-version (if-not (= actual-version expected-version)
                           {:type     :wrong-version
                            :expected expected-version
