@@ -20,10 +20,6 @@
     (cassandra/wait-turn test)
     (cassandra/start! test)))
 
-(defn teardown-cassandra!
-  [node]
-  (cassandra/wipe! node))
-
 (defn create-properties
   [node]
   (let [properties (Properties.)]

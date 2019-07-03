@@ -1,5 +1,6 @@
 (ns jepsen.scalardl
-  (:require [clojure.tools.logging :refer [debug info warn]]
+  (:require [cassandra.core :as cassandra]
+            [clojure.tools.logging :refer [debug info warn]]
             [jepsen
              [cli :as cli]
              [client :as client]
@@ -36,20 +37,23 @@
 (defrecord Client [conn]
   client/Client
   (setup! [this test]
-    (info "registering certificates and contracts")
-    (.registerCertificate conn)
-    (.registerContract
-      conn
-      "read"
-      "com.scalar.jepsen.scalardl.Read"
-      (str ledger-dir "/Read.class")
-      (Optional/empty))
-    (.registerContract
-      conn
-      "write"
-      "com.scalar.jepsen.scalardl.Write"
-      (str ledger-dir "/Write.class")
-      (Optional/empty)))
+    (when @(:register-contracts test)
+      (reset! (:register-contracts test) false)
+
+      (info "registering certificates and contracts")
+      (.registerCertificate conn)
+      (.registerContract
+        conn
+        "read"
+        "com.scalar.jepsen.scalardl.Read"
+        (str ledger-dir "/Read.class")
+        (Optional/empty))
+      (.registerContract
+        conn
+        "write"
+        "com.scalar.jepsen.scalardl.Write"
+        (str ledger-dir "/Write.class")
+        (Optional/empty))))
 
   (open! [this test node]
     (let [clientService (.getInstance (s/create-injector node) ClientService)]
@@ -78,6 +82,8 @@
   [version]
   (reify db/DB
     (setup! [_ test node]
+      ; we don't always wipe Cassandra after a test, so at least do it before
+      (cassandra/wipe! node)
       (s/spinup-cassandra! test node)
 
       (c/upload [(str ledger-dir "/ledger.tar")
@@ -108,7 +114,9 @@
       (info node "tearing down scalardl")
       (cu/stop-daemon! binary pidfile)
       (c/su (c/exec :rm :-rf dir))
-      (s/teardown-cassandra! node))
+      (if (:keep-cassandra test)
+        (cassandra/stop! node)
+        (cassandra/wipe! node)))
 
     db/LogFiles
     (log-files [_ test node]
@@ -116,7 +124,8 @@
        "/root/cassandra/logs/system.log"])))
 
 (def cli-opts
-  [[nil "--rf REPLICATION_FACTOR" "Replication factor"
+  [[nil "--keep-cassandra" "Do not wipe Cassandra after the test is over."]
+   [nil "--rf REPLICATION_FACTOR" "Replication factor for Cassandra."
     :default 3
     :parse-fn parse-long
     :validate [pos? "Must be a positive integer."]]
@@ -137,6 +146,7 @@
          {:name           "scalardl"
           :os             debian/os
           :db             (db "3.11.4")
+          :register-contracts (atom true)
           :decommissioned (atom #{})    ; needed to avoid NullPointerExceptions in Cassandra tests
           :client         (Client. nil)
           :nemesis        (nemesis/partition-random-halves)
@@ -144,7 +154,7 @@
                             (checker/linearizable {:model     (model/register)
                                                    :algorithm :linear}))
           :generator      (->> (independent/concurrent-generator
-                                 10
+                                 1      ; threads per key
                                  (range)
                                  (fn [k]
                                    (->> (gen/mix [r w])
